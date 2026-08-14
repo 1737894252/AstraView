@@ -1,0 +1,15 @@
+.vs/
+bin/
+obj/
+artifacts/
+installer/redist/*.exe
+.dotnet-cli/
+.nuget/
+*.user
+*.suo
+
+# Local test documents and samples
+/*.psd
+/*.psb
+/*.pdf
+/*.json

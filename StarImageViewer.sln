@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer.Core", "src\StarImageViewer.Core\StarImageViewer.Core.csproj", "{BF4FE5E8-899F-41DA-98C8-5A590B2BE56C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer", "src\StarImageViewer\StarImageViewer.csproj", "{6F5B8A67-98E7-421A-BAC4-E96981A1B883}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer.ThumbnailProvider", "src\StarImageViewer.ThumbnailProvider\StarImageViewer.ThumbnailProvider.csproj", "{7E92F8F5-C660-4971-B34B-470CBB24248B}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BF4FE5E8-899F-41DA-98C8-5A590B2BE56C}.Debug|x64.ActiveCfg = Debug|x64
+		{BF4FE5E8-899F-41DA-98C8-5A590B2BE56C}.Debug|x64.Build.0 = Debug|x64
+		{BF4FE5E8-899F-41DA-98C8-5A590B2BE56C}.Release|x64.ActiveCfg = Release|x64
+		{BF4FE5E8-899F-41DA-98C8-5A590B2BE56C}.Release|x64.Build.0 = Release|x64
+		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Debug|x64.ActiveCfg = Debug|x64
+		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Debug|x64.Build.0 = Debug|x64
+		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Release|x64.ActiveCfg = Release|x64
+		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Release|x64.Build.0 = Release|x64
+		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Debug|x64.ActiveCfg = Debug|x64
+		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Debug|x64.Build.0 = Debug|x64
+		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Release|x64.ActiveCfg = Release|x64
+		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+EndGlobal
