@@ -32,6 +32,10 @@ DisableProgramGroupPage=yes
 Source: "..\artifacts\publish\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "redist\NDP48-x86-x64-AllOS-ENU.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsDotNet48OrLater
 
+[InstallDelete]
+Type: files; Name: "{app}\Magick.Native-Q16-x64.dll"
+Type: files; Name: "{app}\Magick.NET-Q16-x64.dll"
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"

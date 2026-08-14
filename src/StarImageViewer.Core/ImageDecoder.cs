@@ -7,6 +7,20 @@ namespace StarImageViewer.Core;
 
 public static class ImageDecoder
 {
+    public sealed class ThumbnailData
+    {
+        public ThumbnailData(byte[] pixels, uint width, uint height)
+        {
+            Pixels = pixels;
+            Width = width;
+            Height = height;
+        }
+
+        public byte[] Pixels { get; }
+        public uint Width { get; }
+        public uint Height { get; }
+    }
+
     public static byte[] DecodeForDisplay(string path, int maxDimension = 8192)
     {
         if (Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
@@ -23,20 +37,24 @@ public static class ImageDecoder
 
     public static byte[] DecodeThumbnail(Stream input, uint requestedSize)
     {
-        if (requestedSize == 0) throw new ArgumentOutOfRangeException(nameof(requestedSize));
-        using var image = ReadFirstUsefulFrame(input);
-        Prepare(image, requestedSize, requestedSize);
-        image.Format = MagickFormat.Bgra;
-        return image.ToByteArray();
+        return DecodeThumbnailWithSize(input, requestedSize).Pixels;
     }
 
     public static (uint Width, uint Height) GetThumbnailSize(Stream input, uint requestedSize)
     {
-        using var image = ReadFirstUsefulFrame(input);
-        image.AutoOrient();
-        var scale = Math.Min(1d, requestedSize / (double)Math.Max(image.Width, image.Height));
-        return ((uint)Math.Max(1, Math.Round(image.Width * scale)),
-                (uint)Math.Max(1, Math.Round(image.Height * scale)));
+        var thumbnail = DecodeThumbnailWithSize(input, requestedSize);
+        return (thumbnail.Width, thumbnail.Height);
+    }
+
+    public static ThumbnailData DecodeThumbnailWithSize(Stream input, uint requestedSize)
+    {
+        if (requestedSize == 0) throw new ArgumentOutOfRangeException(nameof(requestedSize));
+        using var image = ReadFirstUsefulFrame(input, requestedSize);
+        Prepare(image, requestedSize, requestedSize);
+        var width = image.Width;
+        var height = image.Height;
+        image.Format = MagickFormat.Bgra;
+        return new ThumbnailData(image.ToByteArray(), width, height);
     }
 
     private static MagickImage ReadFirstUsefulFrame(string path)
@@ -45,12 +63,12 @@ public static class ImageDecoder
         return new MagickImage(path, settings);
     }
 
-    private static MagickImage ReadFirstUsefulFrame(Stream input)
+    private static MagickImage ReadFirstUsefulFrame(Stream input, uint pdfRenderWidth)
     {
         if (input.CanSeek) input.Position = 0;
         if (IsPdf(input))
         {
-            var rendered = RenderPdfFirstPage(input, 2048);
+            var rendered = RenderPdfFirstPage(input, pdfRenderWidth);
             return new MagickImage(rendered);
         }
         var settings = new MagickReadSettings { FrameIndex = 0, FrameCount = 1 };
