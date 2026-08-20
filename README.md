@@ -1,5 +1,7 @@
 # AstraView
 
+> `codex/native-2.0` 分支正在开发不依赖 .NET 的原生 C++ 2.0 版本。已完成 Win32 + WIC + Direct2D 的可运行基础画布；稳定版请使用 1.3.2。
+
 AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于快速浏览常见图片、设计源文件、相机 RAW 和 PDF，同时为 Windows 资源管理器提供缩略图扩展。
 
 [产品主页](https://1737894252.github.io/AstraView/) · [下载最新版](https://github.com/1737894252/AstraView/releases/latest)
