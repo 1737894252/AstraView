@@ -48,6 +48,7 @@ constexpr float kStatusBarHeight = 44.0f;
 constexpr float kResizeBorder = 6.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
 constexpr UINT kDirectoryChangedMessage = WM_APP + 20;
+constexpr UINT kImageReadyMessage = WM_APP + 21;
 std::once_flag kPdfiumInitialization;
 
 using MagickWandHandle = void;
@@ -111,11 +112,36 @@ struct ThumbnailPixels
     std::vector<BYTE> pixels;
 };
 
+struct ImageTask
+{
+    unsigned generation{};
+    std::wstring path;
+    UINT maximumDimension{};
+    bool highResolution{};
+};
+
+struct ImagePixels
+{
+    unsigned generation{};
+    std::wstring path;
+    UINT width{}, height{}, originalWidth{}, originalHeight{};
+    bool highResolution{};
+    std::vector<BYTE> pixels;
+};
+
 bool IsSupportedImage(const fs::path& path)
 {
     static const std::vector<std::wstring> extensions = {
         L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif", L".pdf", L".psd", L".psb", L".raw", L".dng", L".cr2", L".nef", L".arw" };
     auto extension = path.extension().wstring();
+    std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+    return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
+}
+
+bool IsWicImage(const std::wstring& path)
+{
+    static const std::vector<std::wstring> extensions = { L".jpg", L".jpeg", L".jpe", L".jfif", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif" };
+    auto extension = fs::path(path).extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
     return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
 }
@@ -153,7 +179,7 @@ std::wstring FromUtf8(const std::string& value)
 class ViewerWindow final
 {
 public:
-    ~ViewerWindow() { StopFolderWatcher(); StopThumbnailWorker(); }
+    ~ViewerWindow() { StopFolderWatcher(); StopImageWorker(); StopThumbnailWorker(); }
 
     int Run(HINSTANCE instance, int showCommand, const std::wstring& initialPath)
     {
@@ -180,6 +206,7 @@ public:
             return 1;
         DragAcceptFiles(hwnd_, TRUE);
         StartThumbnailWorker();
+        StartImageWorker();
         LoadRecentFolders();
         ShowWindow(hwnd_, showCommand);
         UpdateWindow(hwnd_);
@@ -192,7 +219,10 @@ public:
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        StopFolderWatcher();
+        StopImageWorker();
         StopThumbnailWorker();
+        DrainPendingImages();
         DrainPendingThumbnails();
         return static_cast<int>(message.wParam);
     }
@@ -231,6 +261,18 @@ public:
 
     void OpenImage(const std::wstring& path)
     {
+        if (IsWicImage(path))
+        {
+            QueueImageLoads(path);
+            return;
+        }
+        OpenImageSynchronously(path);
+    }
+
+    void OpenImageSynchronously(const std::wstring& path)
+    {
+        CancelImageTasks();
+        pendingImagePath_ = path;
         if (IsPdf(path))
         {
             if (OpenPdf(path)) return;
@@ -304,6 +346,7 @@ private:
         case WM_DROPFILES: HandleDrop(reinterpret_cast<HDROP>(wParam)); return 0;
         case WM_KEYDOWN: HandleKey(wParam); return 0;
         case kThumbnailReadyMessage: AdoptThumbnail(reinterpret_cast<ThumbnailPixels*>(lParam)); return 0;
+        case kImageReadyMessage: AdoptImage(reinterpret_cast<ImagePixels*>(lParam)); return 0;
         case kDirectoryChangedMessage: RefreshFolder(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: return DefWindowProcW(hwnd_, message, wParam, lParam);
@@ -317,9 +360,15 @@ private:
         if ((GetKeyState(VK_CONTROL) & 0x8000) && key == 'L') { OpenFileDialog(true); return; }
         if (key == 'F' || key == VK_HOME) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
         if (key == '1') { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
+        if (key == 'R') { RotateClockwise(); return; }
+        if (key == VK_F11) { ToggleFullscreen(); return; }
         if (key == VK_LEFT) { OpenRelativeImage(-1); return; }
         if (key == VK_RIGHT) { OpenRelativeImage(1); return; }
-        if (key == VK_ESCAPE && dragging_) { dragging_ = false; ReleaseCapture(); return; }
+        if (key == VK_ESCAPE)
+        {
+            if (dragging_) { dragging_ = false; ReleaseCapture(); return; }
+            if (fullscreen_) { ToggleFullscreen(); return; }
+        }
     }
 
     void OpenRelativeImage(int direction)
@@ -359,13 +408,15 @@ private:
         else if (x >= 550 && x < 592) OpenRelativeImage(1);
         else if (x >= 604 && x < 666) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
         else if (x >= 678 && x < 730) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 742 && x < 802) RotateClockwise();
+        else if (x >= 814 && x < 882) ToggleFullscreen();
     }
 
     LRESULT HitTest(int screenX, int screenY) const
     {
         POINT point{ screenX, screenY }; ScreenToClient(hwnd_, &point);
         RECT client{}; GetClientRect(hwnd_, &client);
-        if (!IsZoomed(hwnd_))
+        if (!fullscreen_ && !IsZoomed(hwnd_))
         {
             const bool left = point.x < kResizeBorder, right = point.x >= client.right - kResizeBorder;
             const bool top = point.y < kResizeBorder, bottom = point.y >= client.bottom - kResizeBorder;
@@ -382,7 +433,8 @@ private:
         {
             if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) || (point.x >= 422 && point.x < 490) ||
                 (point.x >= 502 && point.x < 544) || (point.x >= 550 && point.x < 592) ||
-                (point.x >= 604 && point.x < 666) || (point.x >= 678 && point.x < 730) || point.x >= client.right - 144)
+                (point.x >= 604 && point.x < 666) || (point.x >= 678 && point.x < 730) ||
+                (point.x >= 742 && point.x < 802) || (point.x >= 814 && point.x < 882) || point.x >= client.right - 144)
                 return HTCLIENT;
             return HTCAPTION;
         }
@@ -421,6 +473,7 @@ private:
     void Pan(int x, int y)
     {
         if (!dragging_) return;
+        userAdjustedView_ = true;
         panX_ += static_cast<float>(x - lastMouse_.x);
         panY_ += static_cast<float>(y - lastMouse_.y);
         lastMouse_ = { x, y };
@@ -445,6 +498,7 @@ private:
     void Zoom(int x, int y, int delta)
     {
         if (!imageSource_) return;
+        userAdjustedView_ = true;
         const float multiplier = delta > 0 ? 1.16f : 1.0f / 1.16f;
         const float oldScale = scale_;
         scale_ = std::clamp(scale_ * multiplier, 0.01f, 32.0f);
@@ -465,6 +519,7 @@ private:
         scale_ = std::max(scale_, 0.01f);
         panX_ = (width - imageWidth_ * scale_) / 2.0f;
         panY_ = kToolbarHeight + (height - imageHeight_ * scale_) / 2.0f;
+        userAdjustedView_ = false;
     }
 
     void SetActualSize()
@@ -474,7 +529,45 @@ private:
         scale_ = 1.0f;
         panX_ = (static_cast<float>(client.right) - imageWidth_) / 2.0f;
         panY_ = kToolbarHeight + (static_cast<float>(client.bottom) - kToolbarHeight - kStatusBarHeight - imageHeight_) / 2.0f;
+        userAdjustedView_ = true;
         SetStatus(ZoomStatus());
+    }
+
+    void RotateClockwise()
+    {
+        if (!imageSource_) return;
+        ComPtr<IWICBitmapFlipRotator> rotated;
+        if (FAILED(wic_->CreateBitmapFlipRotator(&rotated)) || FAILED(rotated->Initialize(imageSource_.Get(), WICBitmapTransformRotate90))) return;
+        imageSource_ = rotated;
+        std::swap(imageWidth_, imageHeight_);
+        imageBitmap_.Reset();
+        FitImage();
+        SetStatus(L"已顺时针旋转 90°  ·  " + ZoomStatus());
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void ToggleFullscreen()
+    {
+        if (!fullscreen_)
+        {
+            GetWindowPlacement(hwnd_, &windowPlacement_);
+            MONITORINFO monitor{ sizeof(monitor) };
+            GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor);
+            SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_CLIPCHILDREN);
+            SetWindowPos(hwnd_, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top,
+                monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top,
+                SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            fullscreen_ = true;
+        }
+        else
+        {
+            SetWindowLongPtrW(hwnd_, GWL_STYLE, WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN);
+            SetWindowPlacement(hwnd_, &windowPlacement_);
+            SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+            fullscreen_ = false;
+        }
+        FitImage();
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     std::wstring ZoomStatus() const
@@ -485,7 +578,8 @@ private:
     void SetStatus(const std::wstring& value) { status_ = value; }
     void UpdateTitle()
     {
-        const std::wstring title = imagePath_.empty() ? L"AstraView 2.0" : FileNameOf(imagePath_) + L" — AstraView 2.0";
+        const std::wstring& activePath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
+        const std::wstring title = activePath.empty() ? L"AstraView 2.0" : FileNameOf(activePath) + L" — AstraView 2.0";
         SetWindowTextW(hwnd_, title.c_str());
     }
 
@@ -635,7 +729,7 @@ private:
         ComPtr<IWICBitmap> source;
         if (FAILED(wic_->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(pdfPixels_.size()), pdfPixels_.data(), &source))) return false;
         imageSource_ = source;
-        imageWidth_ = width; imageHeight_ = height; imagePath_ = path; imageBitmap_.Reset();
+        imageWidth_ = width; imageHeight_ = height; imagePath_ = path; pendingImagePath_.clear(); imageBitmap_.Reset();
         FitImage();
         const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
         SetStatus(L"PDF  " + std::to_wstring(width) + L" × " + std::to_wstring(height) + position);
@@ -673,9 +767,140 @@ private:
         }
         ComPtr<IWICBitmap> source;
         if (FAILED(wic_->CreateBitmapFromMemory(static_cast<UINT>(width), static_cast<UINT>(height), GUID_WICPixelFormat32bppPBGRA, static_cast<UINT>(width * 4), static_cast<UINT>(magickPixels_.size()), magickPixels_.data(), &source))) return false;
-        imageSource_ = source; imageWidth_ = static_cast<UINT>(width); imageHeight_ = static_cast<UINT>(height); imagePath_ = path; imageBitmap_.Reset();
+        imageSource_ = source; imageWidth_ = static_cast<UINT>(width); imageHeight_ = static_cast<UINT>(height); imagePath_ = path; pendingImagePath_.clear(); imageBitmap_.Reset();
         FitImage(); SetStatus(L"ImageMagick  " + std::to_wstring(width) + L" × " + std::to_wstring(height)); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE);
         return true;
+    }
+
+    void StartImageWorker()
+    {
+        imageWorker_ = std::thread([this]
+        {
+            CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            ComPtr<IWICImagingFactory> workerWic;
+            CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&workerWic));
+            for (;;)
+            {
+                ImageTask task;
+                {
+                    std::unique_lock lock(imageMutex_);
+                    imageSignal_.wait(lock, [this] { return imageStopping_ || !imageTasks_.empty(); });
+                    if (imageStopping_) break;
+                    task = std::move(imageTasks_.front());
+                    imageTasks_.pop_front();
+                }
+                auto* pixels = DecodeImage(workerWic.Get(), task);
+                if (!pixels) continue;
+                if (imageStopping_ || pixels->generation != imageGeneration_.load() || !PostMessageW(hwnd_, kImageReadyMessage, 0, reinterpret_cast<LPARAM>(pixels)))
+                    delete pixels;
+            }
+            CoUninitialize();
+        });
+    }
+
+    void StopImageWorker()
+    {
+        {
+            std::lock_guard lock(imageMutex_);
+            imageStopping_ = true;
+            imageTasks_.clear();
+        }
+        imageSignal_.notify_all();
+        if (imageWorker_.joinable()) imageWorker_.join();
+    }
+
+    void QueueImageLoads(const std::wstring& path)
+    {
+        const unsigned generation = ++imageGeneration_;
+        {
+            std::lock_guard lock(imageMutex_);
+            imageTasks_.clear();
+            imageTasks_.push_back({ generation, path, 2048, false });
+            imageTasks_.push_back({ generation, path, 8192, true });
+        }
+        pendingImagePath_ = path;
+        userAdjustedView_ = false;
+        SetStatus(L"正在快速加载 " + FileNameOf(path) + L"…");
+        UpdateTitle();
+        imageSignal_.notify_one();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void CancelImageTasks()
+    {
+        ++imageGeneration_;
+        std::lock_guard lock(imageMutex_);
+        imageTasks_.clear();
+    }
+
+    static ImagePixels* DecodeImage(IWICImagingFactory* factory, const ImageTask& task)
+    {
+        if (!factory) return nullptr;
+        ComPtr<IWICBitmapDecoder> decoder;
+        ComPtr<IWICBitmapFrameDecode> frame;
+        if (FAILED(factory->CreateDecoderFromFilename(task.path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) ||
+            FAILED(decoder->GetFrame(0, &frame))) return nullptr;
+        UINT originalWidth = 0, originalHeight = 0;
+        if (FAILED(frame->GetSize(&originalWidth, &originalHeight)) || !originalWidth || !originalHeight) return nullptr;
+        const float ratio = std::min(1.0f, static_cast<float>(task.maximumDimension) / std::max(originalWidth, originalHeight));
+        const UINT width = std::max(1u, static_cast<UINT>(std::round(originalWidth * ratio)));
+        const UINT height = std::max(1u, static_cast<UINT>(std::round(originalHeight * ratio)));
+        ComPtr<IWICBitmapSource> source = frame;
+        ComPtr<IWICBitmapScaler> scaler;
+        if (width != originalWidth || height != originalHeight)
+        {
+            if (FAILED(factory->CreateBitmapScaler(&scaler)) || FAILED(scaler->Initialize(frame.Get(), width, height, WICBitmapInterpolationModeFant))) return nullptr;
+            source = scaler;
+        }
+        ComPtr<IWICFormatConverter> converter;
+        if (FAILED(factory->CreateFormatConverter(&converter)) ||
+            FAILED(converter->Initialize(source.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return nullptr;
+        auto result = std::make_unique<ImagePixels>();
+        result->generation = task.generation;
+        result->path = task.path;
+        result->width = width;
+        result->height = height;
+        result->originalWidth = originalWidth;
+        result->originalHeight = originalHeight;
+        result->highResolution = task.highResolution;
+        result->pixels.resize(static_cast<size_t>(width) * height * 4);
+        if (FAILED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(result->pixels.size()), result->pixels.data()))) return nullptr;
+        return result.release();
+    }
+
+    void DrainPendingImages()
+    {
+        MSG message{};
+        while (PeekMessageW(&message, hwnd_, kImageReadyMessage, kImageReadyMessage, PM_REMOVE))
+            delete reinterpret_cast<ImagePixels*>(message.lParam);
+    }
+
+    void AdoptImage(ImagePixels* pixels)
+    {
+        std::unique_ptr<ImagePixels> owned(pixels);
+        if (!pixels || pixels->generation != imageGeneration_.load() || pixels->path != pendingImagePath_) return;
+        ComPtr<IWICBitmap> source;
+        if (FAILED(wic_->CreateBitmapFromMemory(pixels->width, pixels->height, GUID_WICPixelFormat32bppPBGRA,
+            pixels->width * 4, static_cast<UINT>(pixels->pixels.size()), pixels->pixels.data(), &source))) return;
+
+        const UINT oldWidth = imageWidth_;
+        const float oldScale = scale_;
+        imagePixels_ = std::move(pixels->pixels);
+        imageSource_ = source;
+        imageWidth_ = pixels->width;
+        imageHeight_ = pixels->height;
+        originalImageWidth_ = pixels->originalWidth;
+        originalImageHeight_ = pixels->originalHeight;
+        imagePath_ = pixels->path;
+        if (pixels->highResolution) pendingImagePath_.clear();
+        imageBitmap_.Reset();
+        if (!pixels->highResolution || !userAdjustedView_) FitImage();
+        else if (oldWidth) scale_ = oldScale * static_cast<float>(oldWidth) / imageWidth_;
+        const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
+        const std::wstring quality = pixels->highResolution ? L"" : L"  ·  快速预览";
+        SetStatus(std::to_wstring(originalImageWidth_) + L" × " + std::to_wstring(originalImageHeight_) + position + quality);
+        UpdateTitle();
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
     void StartThumbnailWorker()
@@ -917,8 +1142,11 @@ private:
         DrawButton(L"›", 550.0f, 42.0f);
         DrawButton(L"适应", 604.0f, 62.0f);
         DrawButton(L"1:1", 678.0f, 52.0f);
-        const std::wstring title = imagePath_.empty() ? L"AstraView" : FileNameOf(imagePath_);
-        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(740, 0, std::max(740.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        DrawButton(L"旋转", 742.0f, 60.0f);
+        DrawButton(L"全屏", 814.0f, 68.0f);
+        const std::wstring& displayPath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
+        const std::wstring title = displayPath.empty() ? L"AstraView" : FileNameOf(displayPath);
+        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(894, 0, std::max(894.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
         DrawWindowButton(L"—", size.width - 144.0f, false);
         DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
         DrawWindowButton(L"×", size.width - 48.0f, true);
@@ -957,7 +1185,8 @@ private:
     ComPtr<IDWriteTextFormat> textFormat_;
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
-    std::wstring imagePath_, folderPath_, status_;
+    std::wstring imagePath_, pendingImagePath_, folderPath_, status_;
+    std::vector<BYTE> imagePixels_;
     std::vector<BYTE> pdfPixels_;
     std::vector<BYTE> magickPixels_;
     std::vector<std::wstring> images_;
@@ -969,13 +1198,22 @@ private:
     std::deque<ThumbnailTask> thumbnailTasks_;
     std::atomic_uint thumbnailGeneration_{};
     std::atomic_bool thumbnailStopping_{};
+    std::thread imageWorker_;
+    std::mutex imageMutex_;
+    std::condition_variable imageSignal_;
+    std::deque<ImageTask> imageTasks_;
+    std::atomic_uint imageGeneration_{};
+    std::atomic_bool imageStopping_{};
     std::thread folderWatcher_;
     HANDLE folderStopEvent_{};
+    WINDOWPLACEMENT windowPlacement_{ sizeof(WINDOWPLACEMENT) };
     size_t currentImage_{};
     size_t thumbnailOffset_{};
-    UINT imageWidth_{}, imageHeight_{};
+    UINT imageWidth_{}, imageHeight_{}, originalImageWidth_{}, originalImageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
     bool dragging_{};
+    bool userAdjustedView_{};
+    bool fullscreen_{};
     POINT lastMouse_{}, mouseDown_{};
 };
 }

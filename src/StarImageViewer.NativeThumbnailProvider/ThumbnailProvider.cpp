@@ -3,8 +3,11 @@
 #include <thumbcache.h>
 #include <shlwapi.h>
 #include <wincodec.h>
+#include <fpdfview.h>
 #include <atomic>
 #include <algorithm>
+#include <cmath>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -15,10 +18,29 @@ constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\AstraView.ThumbnailWorker.v1";
 const CLSID kClsid = {0x5e2d8e48, 0x6f15, 0x4c3d, {0xae, 0xd8, 0xbd, 0xa6, 0x54, 0x4d, 0x22, 0x53}};
 HINSTANCE g_module{};
 std::atomic<long> g_objects{};
+std::once_flag g_pdfium;
+
+using MagickWandHandle = void;
+using MagickBoolean = int;
+struct MagickApi {
+    HMODULE module{};
+    void (*genesis)(){};
+    MagickWandHandle* (*create)(){};
+    MagickWandHandle* (*destroy)(MagickWandHandle*){};
+    MagickBoolean (*readFile)(MagickWandHandle*, const char*){};
+    size_t (*getWidth)(MagickWandHandle*){};
+    size_t (*getHeight)(MagickWandHandle*){};
+    MagickBoolean (*resize)(MagickWandHandle*, size_t, size_t, int, double){};
+    MagickBoolean (*exportPixels)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*){};
+    bool Load();
+};
+MagickApi g_magick;
 
 constexpr const wchar_t* kExtensions[] = {
     L".3fr",L".arw",L".avif",L".bmp",L".cr2",L".cr3",L".crw",L".dcr",L".dds",L".dng",L".emf",L".erf",L".exr",L".gif",L".heic",L".heif",L".ico",L".jfif",L".jpe",L".jpeg",L".jpg",L".jxl",L".kdc",L".miff",L".mos",L".mrw",L".nef",L".nrw",L".orf",L".pbm",L".pcx",L".pef",L".pgm",L".png",L".pnm",L".ppm",L".psb",L".psd",L".raf",L".raw",L".rw2",L".rwl",L".sgi",L".sr2",L".srf",L".svg",L".svgz",L".tga",L".tif",L".tiff",L".webp",L".wmf",L".x3f",L".xbm",L".xpm",L".pdf"
 };
+
+HRESULT CreateBitmap(const std::vector<BYTE>& pixels, UINT width, UINT height, HBITMAP* bitmap);
 
 bool CompleteIo(HANDLE file, OVERLAPPED& overlapped, BOOL started, DWORD& done) {
     if (started) return true;
@@ -46,6 +68,86 @@ std::wstring ModuleDirectory() {
     GetModuleFileNameW(g_module, path, ARRAYSIZE(path));
     PathRemoveFileSpecW(path);
     return path;
+}
+
+bool MagickApi::Load() {
+    if (module) return true;
+    const std::wstring filename = ModuleDirectory() + L"\\CORE_RL_MagickWand_.dll";
+    module = LoadLibraryW(filename.c_str());
+    if (!module) {
+        const std::wstring parent = ModuleDirectory() + L"\\..\\CORE_RL_MagickWand_.dll";
+        module = LoadLibraryW(parent.c_str());
+    }
+    if (!module) return false;
+    genesis = reinterpret_cast<void (*)()>(GetProcAddress(module, "MagickWandGenesis"));
+    create = reinterpret_cast<MagickWandHandle* (*)()>(GetProcAddress(module, "NewMagickWand"));
+    destroy = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*)>(GetProcAddress(module, "DestroyMagickWand"));
+    readFile = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, const char*)>(GetProcAddress(module, "MagickReadImage"));
+    getWidth = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageWidth"));
+    getHeight = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageHeight"));
+    resize = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, size_t, size_t, int, double)>(GetProcAddress(module, "MagickResizeImage"));
+    exportPixels = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*)>(GetProcAddress(module, "MagickExportImagePixels"));
+    if (!genesis || !create || !destroy || !readFile || !getWidth || !getHeight || !resize || !exportPixels) return false;
+    genesis();
+    return true;
+}
+
+std::string ToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), length, nullptr, nullptr);
+    return result;
+}
+
+bool IsPdfPath(const std::wstring& path) {
+    const size_t dot = path.find_last_of(L'.');
+    return dot != std::wstring::npos && _wcsicmp(path.c_str() + dot, L".pdf") == 0;
+}
+
+HRESULT DecodeWithMagick(const std::wstring& path, UINT requestedSize, HBITMAP* bitmap) {
+    if (!g_magick.Load()) return E_FAIL;
+    MagickWandHandle* wand = g_magick.create();
+    if (!wand) return E_OUTOFMEMORY;
+    const std::string utf8 = ToUtf8(path);
+    if (!g_magick.readFile(wand, utf8.c_str())) { g_magick.destroy(wand); return E_FAIL; }
+    const size_t originalWidth = g_magick.getWidth(wand), originalHeight = g_magick.getHeight(wand);
+    if (!originalWidth || !originalHeight) { g_magick.destroy(wand); return E_FAIL; }
+    const double scale = std::min(1.0, static_cast<double>(requestedSize) / std::max(originalWidth, originalHeight));
+    const size_t width = std::max<size_t>(1, static_cast<size_t>(std::round(originalWidth * scale)));
+    const size_t height = std::max<size_t>(1, static_cast<size_t>(std::round(originalHeight * scale)));
+    if ((width != originalWidth || height != originalHeight) && !g_magick.resize(wand, width, height, 22, 1.0)) { g_magick.destroy(wand); return E_FAIL; }
+    std::vector<BYTE> pixels(width * height * 4);
+    const bool exported = g_magick.exportPixels(wand, 0, 0, width, height, "BGRA", 1, pixels.data()) != 0;
+    g_magick.destroy(wand);
+    if (!exported) return E_FAIL;
+    for (size_t index = 0; index < pixels.size(); index += 4) {
+        const BYTE alpha = pixels[index + 3];
+        pixels[index] = static_cast<BYTE>((pixels[index] * alpha + 127) / 255);
+        pixels[index + 1] = static_cast<BYTE>((pixels[index + 1] * alpha + 127) / 255);
+        pixels[index + 2] = static_cast<BYTE>((pixels[index + 2] * alpha + 127) / 255);
+    }
+    return CreateBitmap(pixels, static_cast<UINT>(width), static_cast<UINT>(height), bitmap);
+}
+
+HRESULT DecodePdf(const std::wstring& path, UINT requestedSize, HBITMAP* bitmap) {
+    std::call_once(g_pdfium, [] { FPDF_InitLibrary(); });
+    const std::string utf8 = ToUtf8(path);
+    FPDF_DOCUMENT document = FPDF_LoadDocument(utf8.c_str(), nullptr);
+    if (!document) return E_FAIL;
+    FPDF_PAGE page = FPDF_LoadPage(document, 0);
+    if (!page) { FPDF_CloseDocument(document); return E_FAIL; }
+    const float pageWidth = FPDF_GetPageWidthF(page), pageHeight = FPDF_GetPageHeightF(page);
+    const float scale = std::min(static_cast<float>(requestedSize) / std::max(pageWidth, pageHeight), 1.0f);
+    const UINT width = std::max(1u, static_cast<UINT>(std::round(pageWidth * scale)));
+    const UINT height = std::max(1u, static_cast<UINT>(std::round(pageHeight * scale)));
+    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4, 255);
+    FPDF_BITMAP pageBitmap = FPDFBitmap_CreateEx(width, height, FPDFBitmap_BGRA, pixels.data(), width * 4);
+    if (pageBitmap) FPDF_RenderPageBitmap(pageBitmap, page, 0, 0, width, height, 0, FPDF_ANNOT);
+    FPDF_ClosePage(page); FPDF_CloseDocument(document);
+    if (!pageBitmap) return E_OUTOFMEMORY;
+    FPDFBitmap_Destroy(pageBitmap);
+    return CreateBitmap(pixels, width, height, bitmap);
 }
 
 void StartWorker() {
@@ -169,8 +271,11 @@ public:
             }
         }
         if (input.empty()) { HRESULT hr = SaveStreamToTemporaryFile(input); if (FAILED(hr)) return hr; temporary = true; }
-        HRESULT result = RequestThumbnail(input, std::min(size, 2048u), bitmap, alpha);
+        HRESULT result = IsPdfPath(input)
+            ? DecodePdf(input, std::min(size, 2048u), bitmap)
+            : DecodeWithMagick(input, std::min(size, 2048u), bitmap);
         if (temporary) DeleteFileW(input.c_str());
+        if (SUCCEEDED(result)) *alpha = WTSAT_ARGB;
         return result;
     }
 private:
