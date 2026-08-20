@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -18,6 +19,7 @@
 #include <cwctype>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -45,6 +47,7 @@ constexpr float kThumbnailHeight = 88.0f;
 constexpr float kStatusBarHeight = 44.0f;
 constexpr float kResizeBorder = 6.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
+constexpr UINT kDirectoryChangedMessage = WM_APP + 20;
 std::once_flag kPdfiumInitialization;
 
 using MagickWandHandle = void;
@@ -138,10 +141,19 @@ std::string ToUtf8(const std::wstring& value)
     return result;
 }
 
+std::wstring FromUtf8(const std::string& value)
+{
+    if (value.empty()) return {};
+    const int length = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    std::wstring result(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), length);
+    return result;
+}
+
 class ViewerWindow final
 {
 public:
-    ~ViewerWindow() { StopThumbnailWorker(); }
+    ~ViewerWindow() { StopFolderWatcher(); StopThumbnailWorker(); }
 
     int Run(HINSTANCE instance, int showCommand, const std::wstring& initialPath)
     {
@@ -168,6 +180,7 @@ public:
             return 1;
         DragAcceptFiles(hwnd_, TRUE);
         StartThumbnailWorker();
+        LoadRecentFolders();
         ShowWindow(hwnd_, showCommand);
         UpdateWindow(hwnd_);
         if (!initialPath.empty())
@@ -191,6 +204,7 @@ public:
         if (fs::is_directory(candidate, error))
         {
             folderPath_ = candidate.wstring();
+            RememberFolder(folderPath_);
             images_.clear();
             thumbnailOffset_ = 0;
             for (const auto& entry : fs::directory_iterator(candidate, fs::directory_options::skip_permission_denied, error))
@@ -201,6 +215,7 @@ public:
             std::sort(images_.begin(), images_.end());
             thumbnails_.clear();
             QueueThumbnails();
+            StartFolderWatcher(folderPath_);
             if (!images_.empty()) { currentImage_ = 0; OpenImage(images_.front()); return; }
             SetStatus(L"此文件夹没有可由 WIC 直接解码的图片");
             return;
@@ -208,6 +223,7 @@ public:
         images_.clear();
         thumbnails_.clear();
         thumbnailOffset_ = 0;
+        StopFolderWatcher();
         CancelThumbnailTasks();
         currentImage_ = 0;
         OpenImage(path);
@@ -288,6 +304,7 @@ private:
         case WM_DROPFILES: HandleDrop(reinterpret_cast<HDROP>(wParam)); return 0;
         case WM_KEYDOWN: HandleKey(wParam); return 0;
         case kThumbnailReadyMessage: AdoptThumbnail(reinterpret_cast<ThumbnailPixels*>(lParam)); return 0;
+        case kDirectoryChangedMessage: RefreshFolder(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: return DefWindowProcW(hwnd_, message, wParam, lParam);
         }
@@ -337,10 +354,11 @@ private:
         if (y < 0 || y > static_cast<int>(kToolbarHeight)) return;
         if (x >= 158 && x < 274) OpenFileDialog(false);
         else if (x >= 286 && x < 410) OpenFileDialog(true);
-        else if (x >= 414 && x < 456) OpenRelativeImage(-1);
-        else if (x >= 462 && x < 504) OpenRelativeImage(1);
-        else if (x >= 516 && x < 578) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 590 && x < 642) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 422 && x < 490) OpenRecentMenu();
+        else if (x >= 502 && x < 544) OpenRelativeImage(-1);
+        else if (x >= 550 && x < 592) OpenRelativeImage(1);
+        else if (x >= 604 && x < 666) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 678 && x < 730) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
     }
 
     LRESULT HitTest(int screenX, int screenY) const
@@ -362,9 +380,9 @@ private:
         }
         if (point.y >= 0 && point.y < static_cast<int>(kToolbarHeight))
         {
-            if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) ||
-                (point.x >= 414 && point.x < 456) || (point.x >= 462 && point.x < 504) ||
-                (point.x >= 516 && point.x < 578) || (point.x >= 590 && point.x < 642) || point.x >= client.right - 144)
+            if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) || (point.x >= 422 && point.x < 490) ||
+                (point.x >= 502 && point.x < 544) || (point.x >= 550 && point.x < 592) ||
+                (point.x >= 604 && point.x < 666) || (point.x >= 678 && point.x < 730) || point.x >= client.right - 144)
                 return HTCLIENT;
             return HTCAPTION;
         }
@@ -496,6 +514,102 @@ private:
                 }
             }
         }
+    }
+
+    void StartFolderWatcher(const std::wstring& folder)
+    {
+        StopFolderWatcher();
+        folderStopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!folderStopEvent_) return;
+        const HANDLE notification = FindFirstChangeNotificationW(folder.c_str(), FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
+        if (notification == INVALID_HANDLE_VALUE) { CloseHandle(folderStopEvent_); folderStopEvent_ = nullptr; return; }
+        folderWatcher_ = std::thread([this, notification]
+        {
+            HANDLE handles[] = { folderStopEvent_, notification };
+            while (WaitForMultipleObjects(2, handles, FALSE, INFINITE) == WAIT_OBJECT_0 + 1)
+            {
+                if (!FindNextChangeNotification(notification)) break;
+                PostMessageW(hwnd_, kDirectoryChangedMessage, 0, 0);
+            }
+            FindCloseChangeNotification(notification);
+        });
+    }
+
+    void StopFolderWatcher()
+    {
+        if (folderStopEvent_) SetEvent(folderStopEvent_);
+        if (folderWatcher_.joinable()) folderWatcher_.join();
+        if (folderStopEvent_) { CloseHandle(folderStopEvent_); folderStopEvent_ = nullptr; }
+    }
+
+    void RefreshFolder()
+    {
+        if (folderPath_.empty()) return;
+        const std::wstring selected = imagePath_;
+        std::vector<std::wstring> refreshed;
+        std::error_code error;
+        for (const auto& entry : fs::directory_iterator(folderPath_, fs::directory_options::skip_permission_denied, error))
+            if (!error && entry.is_regular_file(error) && IsSupportedImage(entry.path())) refreshed.push_back(entry.path().wstring());
+        std::sort(refreshed.begin(), refreshed.end());
+        images_ = std::move(refreshed);
+        thumbnails_.clear(); thumbnailOffset_ = 0; QueueThumbnails();
+        const auto found = std::find(images_.begin(), images_.end(), selected);
+        if (found != images_.end()) currentImage_ = static_cast<size_t>(std::distance(images_.begin(), found));
+        else if (!images_.empty()) currentImage_ = std::min(currentImage_, images_.size() - 1);
+        if (!images_.empty()) { EnsureCurrentThumbnailVisible(); OpenImage(images_[currentImage_]); }
+        else { imageSource_.Reset(); imageBitmap_.Reset(); imagePath_.clear(); SetStatus(L"当前文件夹没有图片"); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE); }
+    }
+
+    fs::path RecentFoldersFile() const
+    {
+        PWSTR localAppData{};
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &localAppData))) return {};
+        fs::path result = fs::path(localAppData) / L"AstraView" / L"recent-folders.txt";
+        CoTaskMemFree(localAppData);
+        return result;
+    }
+
+    void LoadRecentFolders()
+    {
+        const auto file = RecentFoldersFile();
+        if (file.empty()) return;
+        std::ifstream input(file, std::ios::binary);
+        std::string line;
+        while (std::getline(input, line) && recentFolders_.size() < 12)
+        {
+            const auto folder = FromUtf8(line);
+            std::error_code error;
+            if (!folder.empty() && fs::is_directory(folder, error)) recentFolders_.push_back(folder);
+        }
+    }
+
+    void RememberFolder(const std::wstring& folder)
+    {
+        recentFolders_.erase(std::remove(recentFolders_.begin(), recentFolders_.end(), folder), recentFolders_.end());
+        recentFolders_.insert(recentFolders_.begin(), folder);
+        if (recentFolders_.size() > 12) recentFolders_.resize(12);
+        const auto file = RecentFoldersFile();
+        if (file.empty()) return;
+        std::error_code error;
+        fs::create_directories(file.parent_path(), error);
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        for (const auto& item : recentFolders_) output << ToUtf8(item) << '\n';
+    }
+
+    void OpenRecentMenu()
+    {
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return;
+        if (recentFolders_.empty()) AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, L"暂无最近打开的文件夹");
+        else
+        {
+            for (size_t index = 0; index < recentFolders_.size(); ++index)
+                AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(1000 + index), recentFolders_[index].c_str());
+        }
+        POINT point{ 422, static_cast<LONG>(kToolbarHeight) }; ClientToScreen(hwnd_, &point);
+        const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, point.x, point.y, 0, hwnd_, nullptr);
+        DestroyMenu(menu);
+        if (command >= 1000 && command < 1000 + recentFolders_.size()) OpenPath(recentFolders_[command - 1000]);
     }
 
     bool OpenPdf(const std::wstring& path)
@@ -798,12 +912,13 @@ private:
         DrawButton(L"✦  AstraView", 14.0f, 132.0f);
         DrawButton(L"打开  Ctrl+O", 158.0f, 116.0f);
         DrawButton(L"文件夹  Ctrl+L", 286.0f, 132.0f);
-        DrawButton(L"‹", 414.0f, 42.0f);
-        DrawButton(L"›", 462.0f, 42.0f);
-        DrawButton(L"适应", 516.0f, 62.0f);
-        DrawButton(L"1:1", 590.0f, 52.0f);
+        DrawButton(L"最近", 422.0f, 68.0f);
+        DrawButton(L"‹", 502.0f, 42.0f);
+        DrawButton(L"›", 550.0f, 42.0f);
+        DrawButton(L"适应", 604.0f, 62.0f);
+        DrawButton(L"1:1", 678.0f, 52.0f);
         const std::wstring title = imagePath_.empty() ? L"AstraView" : FileNameOf(imagePath_);
-        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(650, 0, std::max(650.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(740, 0, std::max(740.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
         DrawWindowButton(L"—", size.width - 144.0f, false);
         DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
         DrawWindowButton(L"×", size.width - 48.0f, true);
@@ -846,6 +961,7 @@ private:
     std::vector<BYTE> pdfPixels_;
     std::vector<BYTE> magickPixels_;
     std::vector<std::wstring> images_;
+    std::vector<std::wstring> recentFolders_;
     std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
     std::thread thumbnailWorker_;
     std::mutex thumbnailMutex_;
@@ -853,6 +969,8 @@ private:
     std::deque<ThumbnailTask> thumbnailTasks_;
     std::atomic_uint thumbnailGeneration_{};
     std::atomic_bool thumbnailStopping_{};
+    std::thread folderWatcher_;
+    HANDLE folderStopEvent_{};
     size_t currentImage_{};
     size_t thumbnailOffset_{};
     UINT imageWidth_{}, imageHeight_{};
