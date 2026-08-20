@@ -192,6 +192,7 @@ public:
         {
             folderPath_ = candidate.wstring();
             images_.clear();
+            thumbnailOffset_ = 0;
             for (const auto& entry : fs::directory_iterator(candidate, fs::directory_options::skip_permission_denied, error))
             {
                 if (!error && entry.is_regular_file(error) && IsSupportedImage(entry.path()))
@@ -206,6 +207,7 @@ public:
         }
         images_.clear();
         thumbnails_.clear();
+        thumbnailOffset_ = 0;
         CancelThumbnailTasks();
         currentImage_ = 0;
         OpenImage(path);
@@ -278,7 +280,7 @@ private:
         case WM_PAINT: Paint(); return 0;
         case WM_SIZE: if (target_) target_->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam))); return 0;
         case WM_ERASEBKGND: return 1;
-        case WM_MOUSEWHEEL: Zoom(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), GET_WHEEL_DELTA_WPARAM(wParam)); return 0;
+        case WM_MOUSEWHEEL: HandleWheel(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), GET_WHEEL_DELTA_WPARAM(wParam)); return 0;
         case WM_LBUTTONDOWN: dragging_ = true; lastMouse_ = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }; mouseDown_ = lastMouse_; SetCapture(hwnd_); return 0;
         case WM_LBUTTONUP: OnMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
         case WM_MOUSEMOVE: Pan(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
@@ -307,7 +309,7 @@ private:
     {
         if (images_.empty()) return;
         const int next = std::clamp(static_cast<int>(currentImage_) + direction, 0, static_cast<int>(images_.size()) - 1);
-        if (next != static_cast<int>(currentImage_)) { currentImage_ = static_cast<size_t>(next); OpenImage(images_[currentImage_]); }
+        if (next != static_cast<int>(currentImage_)) { currentImage_ = static_cast<size_t>(next); EnsureCurrentThumbnailVisible(); OpenImage(images_[currentImage_]); }
     }
 
     void HandleDrop(HDROP drop)
@@ -374,12 +376,25 @@ private:
         if (images_.empty()) return false;
         RECT client{}; GetClientRect(hwnd_, &client);
         if (y < client.bottom - static_cast<int>(kThumbnailBarHeight + kStatusBarHeight) || y >= client.bottom - static_cast<int>(kStatusBarHeight)) return false;
+        const float stripTop = static_cast<float>(client.bottom) - kStatusBarHeight - kThumbnailBarHeight;
+        if (y >= stripTop + 108.0f)
+        {
+            const size_t visible = VisibleThumbnailCount();
+            if (images_.size() > visible)
+            {
+                const float position = std::clamp((x - 18.0f) / std::max(1.0f, static_cast<float>(client.right) - 36.0f), 0.0f, 1.0f);
+                thumbnailOffset_ = static_cast<size_t>(std::round(position * (images_.size() - visible)));
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+            return true;
+        }
         const size_t first = FirstVisibleThumbnail();
         const int slot = static_cast<int>((x - 18) / kThumbnailWidth);
         const size_t index = first + static_cast<size_t>(std::max(0, slot));
         if (slot >= 0 && index < images_.size() && x < 18 + (slot + 1) * kThumbnailWidth)
         {
             currentImage_ = index;
+            EnsureCurrentThumbnailVisible();
             OpenImage(images_[currentImage_]);
         }
         return true;
@@ -392,6 +407,21 @@ private:
         panY_ += static_cast<float>(y - lastMouse_.y);
         lastMouse_ = { x, y };
         InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void HandleWheel(int screenX, int screenY, int delta)
+    {
+        POINT point{ screenX, screenY }; ScreenToClient(hwnd_, &point);
+        RECT client{}; GetClientRect(hwnd_, &client);
+        const int thumbnailTop = client.bottom - static_cast<int>(kThumbnailBarHeight + kStatusBarHeight);
+        if (!images_.empty() && point.y >= thumbnailTop && point.y < client.bottom - static_cast<int>(kStatusBarHeight))
+        {
+            const int maximum = std::max(0, static_cast<int>(images_.size()) - static_cast<int>(VisibleThumbnailCount()));
+            thumbnailOffset_ = static_cast<size_t>(std::clamp(static_cast<int>(thumbnailOffset_) + (delta > 0 ? -3 : 3), 0, maximum));
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return;
+        }
+        Zoom(point.x, point.y, delta);
     }
 
     void Zoom(int x, int y, int delta)
@@ -704,8 +734,16 @@ private:
 
     size_t FirstVisibleThumbnail() const
     {
-        if (images_.size() <= 8 || currentImage_ < 4) return 0;
-        return std::min(currentImage_ - 4, images_.size() - 8);
+        return std::min(thumbnailOffset_, images_.size() > VisibleThumbnailCount() ? images_.size() - VisibleThumbnailCount() : 0ull);
+    }
+
+    size_t VisibleThumbnailCount() const { return 8; }
+
+    void EnsureCurrentThumbnailVisible()
+    {
+        const size_t visible = VisibleThumbnailCount();
+        if (currentImage_ < thumbnailOffset_) thumbnailOffset_ = currentImage_;
+        else if (currentImage_ >= thumbnailOffset_ + visible) thumbnailOffset_ = currentImage_ - visible + 1;
     }
 
     void DrawThumbnails(const D2D1_SIZE_F& size)
@@ -714,7 +752,7 @@ private:
         const float top = size.height - kStatusBarHeight - kThumbnailBarHeight;
         target_->FillRectangle(D2D1::RectF(0, top, size.width, size.height), toolbarBrush_.Get());
         const size_t first = FirstVisibleThumbnail();
-        const size_t last = std::min(images_.size(), first + 8);
+        const size_t last = std::min(images_.size(), first + VisibleThumbnailCount());
         for (size_t index = first; index < last; ++index)
         {
             const auto found = thumbnails_.find(index);
@@ -722,6 +760,16 @@ private:
             const auto frame = D2D1::RectF(left, top + 18.0f, left + kThumbnailWidth - 10.0f, top + 18.0f + kThumbnailHeight);
             if (index == currentImage_) target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left - 3, top + 15, left + kThumbnailWidth - 7, top + 109), 5, 5), accentBrush_.Get(), 2.0f);
             if (found != thumbnails_.end()) target_->DrawBitmap(found->second.Get(), frame, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        }
+        const float trackTop = top + 111.0f;
+        target_->FillRectangle(D2D1::RectF(18.0f, trackTop, size.width - 18.0f, trackTop + 3.0f), backgroundBrush_.Get());
+        if (images_.size() > VisibleThumbnailCount())
+        {
+            const float trackWidth = size.width - 36.0f;
+            const float thumbWidth = std::max(34.0f, trackWidth * static_cast<float>(VisibleThumbnailCount()) / images_.size());
+            const float ratio = static_cast<float>(first) / (images_.size() - VisibleThumbnailCount());
+            const float left = 18.0f + (trackWidth - thumbWidth) * ratio;
+            target_->FillRectangle(D2D1::RectF(left, trackTop - 1.0f, left + thumbWidth, trackTop + 4.0f), accentBrush_.Get());
         }
     }
 
@@ -806,6 +854,7 @@ private:
     std::atomic_uint thumbnailGeneration_{};
     std::atomic_bool thumbnailStopping_{};
     size_t currentImage_{};
+    size_t thumbnailOffset_{};
     UINT imageWidth_{}, imageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
     bool dragging_{};
