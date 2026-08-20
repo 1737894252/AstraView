@@ -42,6 +42,8 @@ constexpr float kToolbarHeight = 58.0f;
 constexpr float kThumbnailBarHeight = 126.0f;
 constexpr float kThumbnailWidth = 120.0f;
 constexpr float kThumbnailHeight = 88.0f;
+constexpr float kStatusBarHeight = 44.0f;
+constexpr float kResizeBorder = 6.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
 std::once_flag kPdfiumInitialization;
 
@@ -160,7 +162,7 @@ public:
         if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
             return 1;
 
-        hwnd_ = CreateWindowExW(0, kClassName, L"AstraView 2.0", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        hwnd_ = CreateWindowExW(0, kClassName, L"AstraView 2.0", WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, nullptr, nullptr, instance_, this);
         if (!hwnd_)
             return 1;
@@ -271,6 +273,8 @@ private:
     {
         switch (message)
         {
+        case WM_NCCALCSIZE: return 0;
+        case WM_NCHITTEST: return HitTest(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         case WM_PAINT: Paint(); return 0;
         case WM_SIZE: if (target_) target_->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam))); return 0;
         case WM_ERASEBKGND: return 1;
@@ -319,19 +323,57 @@ private:
         dragging_ = false;
         ReleaseCapture();
         if (!wasClick) return;
+        RECT client{}; GetClientRect(hwnd_, &client);
+        if (y >= 0 && y < static_cast<int>(kToolbarHeight) && x >= client.right - 144)
+        {
+            if (x >= client.right - 48) PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+            else if (x >= client.right - 96) ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+            else ShowWindow(hwnd_, SW_MINIMIZE);
+            return;
+        }
         if (HandleThumbnailClick(x, y)) return;
         if (y < 0 || y > static_cast<int>(kToolbarHeight)) return;
-        if (x >= 16 && x < 132) OpenFileDialog(false);
-        else if (x >= 144 && x < 276) OpenFileDialog(true);
-        else if (x >= 288 && x < 368) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 380 && x < 438) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        if (x >= 158 && x < 274) OpenFileDialog(false);
+        else if (x >= 286 && x < 410) OpenFileDialog(true);
+        else if (x >= 414 && x < 456) OpenRelativeImage(-1);
+        else if (x >= 462 && x < 504) OpenRelativeImage(1);
+        else if (x >= 516 && x < 578) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 590 && x < 642) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+    }
+
+    LRESULT HitTest(int screenX, int screenY) const
+    {
+        POINT point{ screenX, screenY }; ScreenToClient(hwnd_, &point);
+        RECT client{}; GetClientRect(hwnd_, &client);
+        if (!IsZoomed(hwnd_))
+        {
+            const bool left = point.x < kResizeBorder, right = point.x >= client.right - kResizeBorder;
+            const bool top = point.y < kResizeBorder, bottom = point.y >= client.bottom - kResizeBorder;
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+        }
+        if (point.y >= 0 && point.y < static_cast<int>(kToolbarHeight))
+        {
+            if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) ||
+                (point.x >= 414 && point.x < 456) || (point.x >= 462 && point.x < 504) ||
+                (point.x >= 516 && point.x < 578) || (point.x >= 590 && point.x < 642) || point.x >= client.right - 144)
+                return HTCLIENT;
+            return HTCAPTION;
+        }
+        return HTCLIENT;
     }
 
     bool HandleThumbnailClick(int x, int y)
     {
         if (images_.empty()) return false;
         RECT client{}; GetClientRect(hwnd_, &client);
-        if (y < client.bottom - static_cast<int>(kThumbnailBarHeight)) return false;
+        if (y < client.bottom - static_cast<int>(kThumbnailBarHeight + kStatusBarHeight) || y >= client.bottom - static_cast<int>(kStatusBarHeight)) return false;
         const size_t first = FirstVisibleThumbnail();
         const int slot = static_cast<int>((x - 18) / kThumbnailWidth);
         const size_t index = first + static_cast<size_t>(std::max(0, slot));
@@ -370,7 +412,7 @@ private:
         if (!imageSource_ || !hwnd_) return;
         RECT client{}; GetClientRect(hwnd_, &client);
         const float width = static_cast<float>(client.right - client.left);
-        const float height = static_cast<float>(client.bottom - client.top) - kToolbarHeight - (images_.empty() ? 0.0f : kThumbnailBarHeight);
+        const float height = static_cast<float>(client.bottom - client.top) - kToolbarHeight - kStatusBarHeight - (images_.empty() ? 0.0f : kThumbnailBarHeight);
         scale_ = std::min((width - 64.0f) / imageWidth_, (height - 64.0f) / imageHeight_);
         scale_ = std::max(scale_, 0.01f);
         panX_ = (width - imageWidth_ * scale_) / 2.0f;
@@ -383,7 +425,7 @@ private:
         RECT client{}; GetClientRect(hwnd_, &client);
         scale_ = 1.0f;
         panX_ = (static_cast<float>(client.right) - imageWidth_) / 2.0f;
-        panY_ = kToolbarHeight + (static_cast<float>(client.bottom) - kToolbarHeight - imageHeight_) / 2.0f;
+        panY_ = kToolbarHeight + (static_cast<float>(client.bottom) - kToolbarHeight - kStatusBarHeight - imageHeight_) / 2.0f;
         SetStatus(ZoomStatus());
     }
 
@@ -669,7 +711,7 @@ private:
     void DrawThumbnails(const D2D1_SIZE_F& size)
     {
         if (images_.empty()) return;
-        const float top = size.height - kThumbnailBarHeight;
+        const float top = size.height - kStatusBarHeight - kThumbnailBarHeight;
         target_->FillRectangle(D2D1::RectF(0, top, size.width, size.height), toolbarBrush_.Get());
         const size_t first = FirstVisibleThumbnail();
         const size_t last = std::min(images_.size(), first + 8);
@@ -690,6 +732,13 @@ private:
         target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
     }
 
+    void DrawWindowButton(const wchar_t* text, float left, bool close)
+    {
+        const auto rect = D2D1::RectF(left, 0.0f, left + 48.0f, kToolbarHeight);
+        if (close) target_->FillRectangle(rect, accentBrush_.Get());
+        target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
+    }
+
     void Paint()
     {
         PAINTSTRUCT ps{}; BeginPaint(hwnd_, &ps);
@@ -698,10 +747,18 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0.045f, 0.055f, 0.075f));
         target_->FillRectangle(D2D1::RectF(0, 0, size.width, kToolbarHeight), toolbarBrush_.Get());
-        DrawButton(L"打开  Ctrl+O", 16.0f, 116.0f);
-        DrawButton(L"文件夹  Ctrl+L", 144.0f, 132.0f);
-        DrawButton(L"适应  F", 288.0f, 80.0f);
-        DrawButton(L"1:1", 380.0f, 58.0f);
+        DrawButton(L"✦  AstraView", 14.0f, 132.0f);
+        DrawButton(L"打开  Ctrl+O", 158.0f, 116.0f);
+        DrawButton(L"文件夹  Ctrl+L", 286.0f, 132.0f);
+        DrawButton(L"‹", 414.0f, 42.0f);
+        DrawButton(L"›", 462.0f, 42.0f);
+        DrawButton(L"适应", 516.0f, 62.0f);
+        DrawButton(L"1:1", 590.0f, 52.0f);
+        const std::wstring title = imagePath_.empty() ? L"AstraView" : FileNameOf(imagePath_);
+        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(650, 0, std::max(650.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        DrawWindowButton(L"—", size.width - 144.0f, false);
+        DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
+        DrawWindowButton(L"×", size.width - 48.0f, true);
 
         if (imageBitmap_)
         {
@@ -714,9 +771,11 @@ private:
             target_->DrawTextW(prompt, static_cast<UINT32>(wcslen(prompt)), textFormat_.Get(), D2D1::RectF(0, size.height / 2 - 25, size.width, size.height / 2 + 25), textBrush_.Get());
         }
         DrawThumbnails(size);
+        const float statusTop = size.height - kStatusBarHeight;
+        target_->FillRectangle(D2D1::RectF(0, statusTop, size.width, size.height), toolbarBrush_.Get());
         const std::wstring footer = status_.empty() ? L"纯 C++ / Win32 + WIC + Direct2D" : status_;
-        const float footerTop = images_.empty() ? size.height - 30.0f : size.height - 22.0f;
-        target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, footerTop, size.width - 16, size.height - 4), textBrush_.Get());
+        target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, statusTop, std::max(16.0f, size.width - 140.0f), size.height), textBrush_.Get());
+        target_->DrawTextW(ZoomStatus().c_str(), static_cast<UINT32>(ZoomStatus().size()), textFormat_.Get(), D2D1::RectF(size.width - 108.0f, statusTop + 6.0f, size.width - 18.0f, size.height - 6.0f), accentBrush_.Get());
         const HRESULT result = target_->EndDraw();
         if (result == D2DERR_RECREATE_TARGET)
         {
