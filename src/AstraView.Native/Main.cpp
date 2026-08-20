@@ -15,6 +15,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #pragma comment(lib, "d2d1.lib")
@@ -31,6 +32,9 @@ namespace
 {
 constexpr wchar_t kClassName[] = L"AstraView.Native.Window";
 constexpr float kToolbarHeight = 58.0f;
+constexpr float kThumbnailBarHeight = 126.0f;
+constexpr float kThumbnailWidth = 120.0f;
+constexpr float kThumbnailHeight = 88.0f;
 
 bool IsSupportedImage(const fs::path& path)
 {
@@ -101,11 +105,13 @@ public:
                     images_.push_back(entry.path().wstring());
             }
             std::sort(images_.begin(), images_.end());
+            thumbnails_.clear();
             if (!images_.empty()) { currentImage_ = 0; OpenImage(images_.front()); return; }
             SetStatus(L"此文件夹没有可由 WIC 直接解码的图片");
             return;
         }
         images_.clear();
+        thumbnails_.clear();
         currentImage_ = 0;
         OpenImage(path);
     }
@@ -209,11 +215,29 @@ private:
         const bool wasClick = std::abs(x - mouseDown_.x) < 5 && std::abs(y - mouseDown_.y) < 5;
         dragging_ = false;
         ReleaseCapture();
-        if (!wasClick || y < 0 || y > static_cast<int>(kToolbarHeight)) return;
+        if (!wasClick) return;
+        if (HandleThumbnailClick(x, y)) return;
+        if (y < 0 || y > static_cast<int>(kToolbarHeight)) return;
         if (x >= 16 && x < 132) OpenFileDialog(false);
         else if (x >= 144 && x < 276) OpenFileDialog(true);
         else if (x >= 288 && x < 368) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
         else if (x >= 380 && x < 438) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+    }
+
+    bool HandleThumbnailClick(int x, int y)
+    {
+        if (images_.empty()) return false;
+        RECT client{}; GetClientRect(hwnd_, &client);
+        if (y < client.bottom - static_cast<int>(kThumbnailBarHeight)) return false;
+        const size_t first = FirstVisibleThumbnail();
+        const int slot = static_cast<int>((x - 18) / kThumbnailWidth);
+        const size_t index = first + static_cast<size_t>(std::max(0, slot));
+        if (slot >= 0 && index < images_.size() && x < 18 + (slot + 1) * kThumbnailWidth)
+        {
+            currentImage_ = index;
+            OpenImage(images_[currentImage_]);
+        }
+        return true;
     }
 
     void Pan(int x, int y)
@@ -243,7 +267,7 @@ private:
         if (!imageSource_ || !hwnd_) return;
         RECT client{}; GetClientRect(hwnd_, &client);
         const float width = static_cast<float>(client.right - client.left);
-        const float height = static_cast<float>(client.bottom - client.top) - kToolbarHeight;
+        const float height = static_cast<float>(client.bottom - client.top) - kToolbarHeight - (images_.empty() ? 0.0f : kThumbnailBarHeight);
         scale_ = std::min((width - 64.0f) / imageWidth_, (height - 64.0f) / imageHeight_);
         scale_ = std::max(scale_, 0.01f);
         panX_ = (width - imageWidth_ * scale_) / 2.0f;
@@ -320,6 +344,47 @@ private:
         return !imageSource_ || SUCCEEDED(target_->CreateBitmapFromWicBitmap(imageSource_.Get(), nullptr, &imageBitmap_));
     }
 
+    size_t FirstVisibleThumbnail() const
+    {
+        if (images_.size() <= 8 || currentImage_ < 4) return 0;
+        return std::min(currentImage_ - 4, images_.size() - 8);
+    }
+
+    ComPtr<ID2D1Bitmap> CreateThumbnail(size_t index)
+    {
+        ComPtr<IWICBitmapDecoder> decoder;
+        ComPtr<IWICBitmapFrameDecode> frame;
+        if (FAILED(wic_->CreateDecoderFromFilename(images_[index].c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) ||
+            FAILED(decoder->GetFrame(0, &frame))) return nullptr;
+        UINT width = 0, height = 0; frame->GetSize(&width, &height);
+        const float ratio = std::min(kThumbnailWidth / width, kThumbnailHeight / height);
+        ComPtr<IWICBitmapScaler> scaler;
+        if (FAILED(wic_->CreateBitmapScaler(&scaler)) || FAILED(scaler->Initialize(frame.Get(), std::max(1u, static_cast<UINT>(width * ratio)), std::max(1u, static_cast<UINT>(height * ratio)), WICBitmapInterpolationModeFant))) return nullptr;
+        ComPtr<IWICFormatConverter> converter;
+        if (FAILED(wic_->CreateFormatConverter(&converter)) || FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return nullptr;
+        ComPtr<ID2D1Bitmap> bitmap;
+        target_->CreateBitmapFromWicBitmap(converter.Get(), nullptr, &bitmap);
+        return bitmap;
+    }
+
+    void DrawThumbnails(const D2D1_SIZE_F& size)
+    {
+        if (images_.empty()) return;
+        const float top = size.height - kThumbnailBarHeight;
+        target_->FillRectangle(D2D1::RectF(0, top, size.width, size.height), toolbarBrush_.Get());
+        const size_t first = FirstVisibleThumbnail();
+        const size_t last = std::min(images_.size(), first + 8);
+        for (size_t index = first; index < last; ++index)
+        {
+            auto& bitmap = thumbnails_[index];
+            if (!bitmap) bitmap = CreateThumbnail(index);
+            const float left = 18.0f + static_cast<float>(index - first) * kThumbnailWidth;
+            const auto frame = D2D1::RectF(left, top + 18.0f, left + kThumbnailWidth - 10.0f, top + 18.0f + kThumbnailHeight);
+            if (index == currentImage_) target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left - 3, top + 15, left + kThumbnailWidth - 7, top + 109), 5, 5), accentBrush_.Get(), 2.0f);
+            if (bitmap) target_->DrawBitmap(bitmap.Get(), frame, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        }
+    }
+
     void DrawButton(const wchar_t* text, float left, float width)
     {
         const D2D1_RECT_F rect = D2D1::RectF(left, 10.0f, left + width, 46.0f);
@@ -350,12 +415,14 @@ private:
             const wchar_t* prompt = L"AstraView Native Preview\n拖入图片，或按 Ctrl+O 打开";
             target_->DrawTextW(prompt, static_cast<UINT32>(wcslen(prompt)), textFormat_.Get(), D2D1::RectF(0, size.height / 2 - 25, size.width, size.height / 2 + 25), textBrush_.Get());
         }
+        DrawThumbnails(size);
         const std::wstring footer = status_.empty() ? L"纯 C++ / Win32 + WIC + Direct2D" : status_;
-        target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, size.height - 30, size.width - 16, size.height - 6), textBrush_.Get());
+        const float footerTop = images_.empty() ? size.height - 30.0f : size.height - 22.0f;
+        target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, footerTop, size.width - 16, size.height - 4), textBrush_.Get());
         const HRESULT result = target_->EndDraw();
         if (result == D2DERR_RECREATE_TARGET)
         {
-            imageBitmap_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
+            imageBitmap_.Reset(); thumbnails_.clear(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
         }
         EndPaint(hwnd_, &ps);
     }
@@ -372,6 +439,7 @@ private:
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, folderPath_, status_;
     std::vector<std::wstring> images_;
+    std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
     size_t currentImage_{};
     UINT imageWidth_{}, imageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
