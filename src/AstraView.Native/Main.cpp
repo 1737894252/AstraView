@@ -94,18 +94,24 @@ public:
         if (fs::is_directory(candidate, error))
         {
             folderPath_ = candidate.wstring();
+            images_.clear();
             for (const auto& entry : fs::directory_iterator(candidate, fs::directory_options::skip_permission_denied, error))
             {
                 if (!error && entry.is_regular_file(error) && IsSupportedImage(entry.path()))
-                {
-                    OpenPath(entry.path().wstring());
-                    return;
-                }
+                    images_.push_back(entry.path().wstring());
             }
+            std::sort(images_.begin(), images_.end());
+            if (!images_.empty()) { currentImage_ = 0; OpenImage(images_.front()); return; }
             SetStatus(L"此文件夹没有可由 WIC 直接解码的图片");
             return;
         }
+        images_.clear();
+        currentImage_ = 0;
+        OpenImage(path);
+    }
 
+    void OpenImage(const std::wstring& path)
+    {
         ComPtr<IWICBitmapDecoder> decoder;
         HRESULT hr = wic_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
         ComPtr<IWICBitmapFrameDecode> frame;
@@ -135,7 +141,8 @@ public:
         imagePath_ = path;
         imageBitmap_.Reset();
         FitImage();
-        SetStatus(std::to_wstring(width) + L" × " + std::to_wstring(height));
+        const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
+        SetStatus(std::to_wstring(width) + L" × " + std::to_wstring(height) + position);
         UpdateTitle();
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
@@ -178,7 +185,16 @@ private:
         if ((GetKeyState(VK_CONTROL) & 0x8000) && key == 'L') { OpenFileDialog(true); return; }
         if (key == 'F' || key == VK_HOME) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
         if (key == '1') { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
+        if (key == VK_LEFT) { OpenRelativeImage(-1); return; }
+        if (key == VK_RIGHT) { OpenRelativeImage(1); return; }
         if (key == VK_ESCAPE && dragging_) { dragging_ = false; ReleaseCapture(); return; }
+    }
+
+    void OpenRelativeImage(int direction)
+    {
+        if (images_.empty()) return;
+        const int next = std::clamp(static_cast<int>(currentImage_) + direction, 0, static_cast<int>(images_.size()) - 1);
+        if (next != static_cast<int>(currentImage_)) { currentImage_ = static_cast<size_t>(next); OpenImage(images_[currentImage_]); }
     }
 
     void HandleDrop(HDROP drop)
@@ -355,6 +371,8 @@ private:
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, folderPath_, status_;
+    std::vector<std::wstring> images_;
+    size_t currentImage_{};
     UINT imageWidth_{}, imageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
     bool dragging_{};
