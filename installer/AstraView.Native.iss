@@ -40,6 +40,9 @@ Name: "contextmenu"; Description: "添加“使用 AstraView 打开”到图片�
 Root: HKLM; Subkey: "SOFTWARE\Classes\AstraView.Image"; ValueType: string; ValueName: ""; ValueData: "AstraView Image"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "SOFTWARE\Classes\AstraView.Image\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
 Root: HKLM; Subkey: "SOFTWARE\Classes\AstraView.Image\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKLM; Subkey: "SOFTWARE\AstraView\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "SOFTWARE\AstraView\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Fast native image viewer with PSD, RAW and PDF support"
+Root: HKLM; Subkey: "SOFTWARE\RegisteredApplications"; ValueType: string; ValueName: "AstraView"; ValueData: "SOFTWARE\AstraView\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\ShellExtension\AstraView.ThumbnailProvider.dll"""; StatusMsg: "正在注册资源管理器缩略图组件…"; Flags: runhidden waituntilterminated
@@ -92,10 +95,50 @@ begin
   end;
 end;
 
+procedure RegisterFileAssociations;
+var
+  Items: TStringList;
+  I: Integer;
+  Ext: String;
+begin
+  Items := TStringList.Create;
+  try
+    Items.Delimiter := ';';
+    Items.StrictDelimiter := True;
+    Items.DelimitedText := Extensions;
+    for I := 0 to Items.Count - 1 do
+    begin
+      Ext := Items[I];
+      RegWriteStringValue(HKLM, 'SOFTWARE\Classes\' + Ext + '\OpenWithProgids', ImageProgId, '');
+      RegWriteStringValue(HKLM, 'SOFTWARE\AstraView\Capabilities\FileAssociations', Ext, ImageProgId);
+    end;
+  finally
+    Items.Free;
+  end;
+end;
+
+procedure UnregisterFileAssociations;
+var
+  Items: TStringList;
+  I: Integer;
+begin
+  Items := TStringList.Create;
+  try
+    Items.Delimiter := ';';
+    Items.StrictDelimiter := True;
+    Items.DelimitedText := Extensions;
+    for I := 0 to Items.Count - 1 do
+      RegDeleteValue(HKLM, 'SOFTWARE\Classes\' + Items[I] + '\OpenWithProgids', ImageProgId);
+  finally
+    Items.Free;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RegisterFileAssociations;
     ConfigureContextMenu(WizardIsTaskSelected('contextmenu'));
     NotifyShell;
   end;
@@ -105,6 +148,7 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
+    UnregisterFileAssociations;
     ConfigureContextMenu(False);
     NotifyShell;
   end;

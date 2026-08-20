@@ -55,7 +55,11 @@ Get-ChildItem -LiteralPath $stage -Recurse -File | Measure-Object -Property Leng
 }
 
 if ($Installer) {
-    $iscc = @('C:\Program Files (x86)\Inno Setup 6\ISCC.exe', 'C:\Program Files\Inno Setup 6\ISCC.exe') | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    $iscc = @(
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe',
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $iscc) { throw 'Inno Setup 6 was not found. The staged native payload is ready, but the installer was not created.' }
     & $iscc (Join-Path $root 'installer\AstraView.Native.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
