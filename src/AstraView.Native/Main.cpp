@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <urlmon.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <fpdfview.h>
@@ -33,6 +34,7 @@
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "urlmon.lib")
 
 using Microsoft::WRL::ComPtr;
 namespace fs = std::filesystem;
@@ -49,6 +51,7 @@ constexpr float kResizeBorder = 6.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
 constexpr UINT kDirectoryChangedMessage = WM_APP + 20;
 constexpr UINT kImageReadyMessage = WM_APP + 21;
+constexpr UINT kUpdateReadyMessage = WM_APP + 22;
 std::once_flag kPdfiumInitialization;
 
 using MagickWandHandle = void;
@@ -129,6 +132,19 @@ struct ImagePixels
     std::vector<BYTE> pixels;
 };
 
+enum class UpdateResultKind { Check, Download };
+
+struct UpdateResult
+{
+    UpdateResultKind kind{ UpdateResultKind::Check };
+    bool success{};
+    bool available{};
+    std::wstring version;
+    std::wstring downloadUrl;
+    std::wstring installerPath;
+    std::wstring error;
+};
+
 bool IsSupportedImage(const fs::path& path)
 {
     static const std::vector<std::wstring> extensions = {
@@ -179,7 +195,7 @@ std::wstring FromUtf8(const std::string& value)
 class ViewerWindow final
 {
 public:
-    ~ViewerWindow() { StopFolderWatcher(); StopImageWorker(); StopThumbnailWorker(); }
+    ~ViewerWindow() { StopFolderWatcher(); StopUpdateWorker(); StopImageWorker(); StopThumbnailWorker(); }
 
     int Run(HINSTANCE instance, int showCommand, const std::wstring& initialPath)
     {
@@ -220,8 +236,10 @@ public:
             DispatchMessageW(&message);
         }
         StopFolderWatcher();
+        StopUpdateWorker();
         StopImageWorker();
         StopThumbnailWorker();
+        DrainPendingUpdates();
         DrainPendingImages();
         DrainPendingThumbnails();
         return static_cast<int>(message.wParam);
@@ -347,6 +365,7 @@ private:
         case WM_KEYDOWN: HandleKey(wParam); return 0;
         case kThumbnailReadyMessage: AdoptThumbnail(reinterpret_cast<ThumbnailPixels*>(lParam)); return 0;
         case kImageReadyMessage: AdoptImage(reinterpret_cast<ImagePixels*>(lParam)); return 0;
+        case kUpdateReadyMessage: AdoptUpdate(reinterpret_cast<UpdateResult*>(lParam)); return 0;
         case kDirectoryChangedMessage: RefreshFolder(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: return DefWindowProcW(hwnd_, message, wParam, lParam);
@@ -358,6 +377,7 @@ private:
     {
         if ((GetKeyState(VK_CONTROL) & 0x8000) && key == 'O') { OpenFileDialog(false); return; }
         if ((GetKeyState(VK_CONTROL) & 0x8000) && key == 'L') { OpenFileDialog(true); return; }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && key == 'U') { StartUpdateCheck(); return; }
         if (key == 'F' || key == VK_HOME) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
         if (key == '1') { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); return; }
         if (key == 'R') { RotateClockwise(); return; }
@@ -410,6 +430,7 @@ private:
         else if (x >= 678 && x < 730) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
         else if (x >= 742 && x < 802) RotateClockwise();
         else if (x >= 814 && x < 882) ToggleFullscreen();
+        else if (x >= 894 && x < 962) StartUpdateCheck();
     }
 
     LRESULT HitTest(int screenX, int screenY) const
@@ -434,7 +455,8 @@ private:
             if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) || (point.x >= 422 && point.x < 490) ||
                 (point.x >= 502 && point.x < 544) || (point.x >= 550 && point.x < 592) ||
                 (point.x >= 604 && point.x < 666) || (point.x >= 678 && point.x < 730) ||
-                (point.x >= 742 && point.x < 802) || (point.x >= 814 && point.x < 882) || point.x >= client.right - 144)
+                (point.x >= 742 && point.x < 802) || (point.x >= 814 && point.x < 882) ||
+                (point.x >= 894 && point.x < 962) || point.x >= client.right - 144)
                 return HTCLIENT;
             return HTCAPTION;
         }
@@ -903,6 +925,165 @@ private:
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
 
+    static bool ExtractJsonString(const std::wstring& text, const wchar_t* name, std::wstring& value)
+    {
+        const std::wstring key = L"\"" + std::wstring(name) + L"\"";
+        const size_t keyAt = text.find(key);
+        if (keyAt == std::wstring::npos) return false;
+        const size_t colon = text.find(L':', keyAt + key.size());
+        const size_t firstQuote = colon == std::wstring::npos ? std::wstring::npos : text.find(L'\"', colon + 1);
+        const size_t secondQuote = firstQuote == std::wstring::npos ? std::wstring::npos : text.find(L'\"', firstQuote + 1);
+        if (secondQuote == std::wstring::npos) return false;
+        value = text.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+        return true;
+    }
+
+    static bool IsVersionNewer(const std::wstring& candidate, const std::wstring& current)
+    {
+        std::vector<int> left, right;
+        auto parse = [](const std::wstring& version, std::vector<int>& values)
+        {
+            size_t start = 0;
+            while (start < version.size() && values.size() < 4)
+            {
+                const size_t end = version.find(L'.', start);
+                const std::wstring part = version.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+                if (part.empty() || !std::all_of(part.begin(), part.end(), iswdigit)) return false;
+                values.push_back(_wtoi(part.c_str()));
+                if (end == std::wstring::npos) break;
+                start = end + 1;
+            }
+            while (values.size() < 4) values.push_back(0);
+            return !values.empty();
+        };
+        if (!parse(candidate, left) || !parse(current, right)) return false;
+        return left > right;
+    }
+
+    fs::path UpdateCacheDirectory() const
+    {
+        PWSTR localAppData{};
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT, nullptr, &localAppData))) return {};
+        fs::path result = fs::path(localAppData) / L"AstraView" / L"Updates";
+        CoTaskMemFree(localAppData);
+        std::error_code error;
+        fs::create_directories(result, error);
+        return error ? fs::path{} : result;
+    }
+
+    UpdateResult CheckForUpdate()
+    {
+        UpdateResult result;
+        result.kind = UpdateResultKind::Check;
+        const fs::path directory = UpdateCacheDirectory();
+        if (directory.empty()) { result.error = L"无法创建更新缓存目录。"; return result; }
+        const fs::path manifest = directory / L"update.json";
+        const HRESULT download = URLDownloadToFileW(nullptr, L"https://raw.githubusercontent.com/1737894252/AstraView/main/update.json", manifest.c_str(), 0, nullptr);
+        if (FAILED(download)) { result.error = L"无法连接更新服务（" + std::to_wstring(static_cast<unsigned long>(download)) + L"）。"; return result; }
+        std::ifstream input(manifest, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        std::wstring version;
+        if (text.empty() || !ExtractJsonString(FromUtf8(text), L"version", version)) { result.error = L"更新清单格式无效。"; return result; }
+        result.success = true;
+        result.version = version;
+        result.available = IsVersionNewer(version, L"2.0.0");
+        if (result.available && !ExtractJsonString(FromUtf8(text), L"downloadUrl", result.downloadUrl))
+        {
+            result.success = false;
+            result.error = L"更新清单缺少下载地址。";
+        }
+        return result;
+    }
+
+    UpdateResult DownloadUpdate(const std::wstring& version, const std::wstring& url)
+    {
+        UpdateResult result;
+        result.kind = UpdateResultKind::Download;
+        const fs::path directory = UpdateCacheDirectory();
+        if (directory.empty()) { result.error = L"无法创建更新缓存目录。"; return result; }
+        result.installerPath = (directory / (L"AstraView-Setup-" + version + L"-x64.exe")).wstring();
+        const HRESULT download = URLDownloadToFileW(nullptr, url.c_str(), result.installerPath.c_str(), 0, nullptr);
+        if (FAILED(download)) { result.error = L"下载更新失败（" + std::to_wstring(static_cast<unsigned long>(download)) + L"）。"; return result; }
+        result.success = true;
+        return result;
+    }
+
+    void StartUpdateCheck()
+    {
+        if (updateInProgress_) return;
+        if (updateWorker_.joinable()) updateWorker_.join();
+        updateInProgress_ = true;
+        SetStatus(L"正在检查更新…");
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        updateWorker_ = std::thread([this]
+        {
+            auto result = std::make_unique<UpdateResult>(CheckForUpdate());
+            if (!PostMessageW(hwnd_, kUpdateReadyMessage, 0, reinterpret_cast<LPARAM>(result.get()))) return;
+            result.release();
+        });
+    }
+
+    void StartUpdateDownload(const std::wstring& version, const std::wstring& url)
+    {
+        if (updateWorker_.joinable()) updateWorker_.join();
+        updateInProgress_ = true;
+        SetStatus(L"正在下载更新…");
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        updateWorker_ = std::thread([this, version, url]
+        {
+            auto result = std::make_unique<UpdateResult>(DownloadUpdate(version, url));
+            if (!PostMessageW(hwnd_, kUpdateReadyMessage, 0, reinterpret_cast<LPARAM>(result.get()))) return;
+            result.release();
+        });
+    }
+
+    void StopUpdateWorker()
+    {
+        if (updateWorker_.joinable()) updateWorker_.join();
+    }
+
+    void DrainPendingUpdates()
+    {
+        MSG message{};
+        while (PeekMessageW(&message, hwnd_, kUpdateReadyMessage, kUpdateReadyMessage, PM_REMOVE))
+            delete reinterpret_cast<UpdateResult*>(message.lParam);
+    }
+
+    void AdoptUpdate(UpdateResult* update)
+    {
+        std::unique_ptr<UpdateResult> owned(update);
+        if (updateWorker_.joinable()) updateWorker_.join();
+        updateInProgress_ = false;
+        if (!update || !update->success)
+        {
+            SetStatus(L"检查更新失败");
+            const std::wstring error = update && !update->error.empty() ? update->error : L"更新服务不可用。";
+            MessageBoxW(hwnd_, error.c_str(), L"AstraView 更新", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        if (update->kind == UpdateResultKind::Check)
+        {
+            if (!update->available)
+            {
+                SetStatus(L"已是最新版本 2.0.0");
+                MessageBoxW(hwnd_, L"当前已是最新版本 2.0.0。", L"AstraView 更新", MB_OK | MB_ICONINFORMATION);
+                return;
+            }
+            const std::wstring prompt = L"发现新版本 " + update->version + L"。现在下载并自动安装吗？";
+            if (MessageBoxW(hwnd_, prompt.c_str(), L"AstraView 更新", MB_YESNO | MB_ICONINFORMATION) == IDYES)
+                StartUpdateDownload(update->version, update->downloadUrl);
+            return;
+        }
+        SetStatus(L"下载完成，正在启动更新…");
+        if (reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", update->installerPath.c_str(), L"/CLOSEAPPLICATIONS", nullptr, SW_SHOWNORMAL)) <= 32)
+        {
+            SetStatus(L"无法启动更新安装程序");
+            MessageBoxW(hwnd_, L"下载完成，但无法启动安装程序。", L"AstraView 更新", MB_OK | MB_ICONWARNING);
+            return;
+        }
+        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+    }
+
     void StartThumbnailWorker()
     {
         thumbnailWorker_ = std::thread([this]
@@ -1144,9 +1325,10 @@ private:
         DrawButton(L"1:1", 678.0f, 52.0f);
         DrawButton(L"旋转", 742.0f, 60.0f);
         DrawButton(L"全屏", 814.0f, 68.0f);
+        DrawButton(L"更新", 894.0f, 68.0f);
         const std::wstring& displayPath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
         const std::wstring title = displayPath.empty() ? L"AstraView" : FileNameOf(displayPath);
-        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(894, 0, std::max(894.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(974, 0, std::max(974.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
         DrawWindowButton(L"—", size.width - 144.0f, false);
         DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
         DrawWindowButton(L"×", size.width - 48.0f, true);
@@ -1204,6 +1386,8 @@ private:
     std::deque<ImageTask> imageTasks_;
     std::atomic_uint imageGeneration_{};
     std::atomic_bool imageStopping_{};
+    std::thread updateWorker_;
+    bool updateInProgress_{};
     std::thread folderWatcher_;
     HANDLE folderStopEvent_{};
     WINDOWPLACEMENT windowPlacement_{ sizeof(WINDOWPLACEMENT) };
