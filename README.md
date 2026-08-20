@@ -2,6 +2,8 @@
 
 AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于快速浏览常见图片、设计源文件、相机 RAW 和 PDF，同时为 Windows 资源管理器提供缩略图扩展。
 
+[产品主页](https://1737894252.github.io/AstraView/) · [下载最新版](https://github.com/1737894252/AstraView/releases/latest)
+
 ## 功能
 
 - 打开单张图片，或按目录浏览图片与子目录

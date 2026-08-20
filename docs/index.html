@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="description" content="AstraView — 快速、现代的 Windows 图片查看器，支持 PSD、RAW、HEIC、AVIF、WebP、PDF 和资源管理器缩略图。">
+  <meta property="og:title" content="AstraView — Windows 图片查看器">
+  <meta property="og:description" content="快速浏览常见图片、设计源文件、相机 RAW 和 PDF。">
+  <meta property="og:image" content="https://raw.githubusercontent.com/1737894252/AstraView/main/assets/astraview-icon-512.png">
+  <title>AstraView — Windows 图片查看器</title>
+  <link rel="icon" href="https://raw.githubusercontent.com/1737894252/AstraView/main/assets/astraview-icon-512.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="AstraView 首页">
+      <img src="https://raw.githubusercontent.com/1737894252/AstraView/main/assets/astraview-icon-512.png" alt="">
+      <span>AstraView</span>
+    </a>
+    <nav aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#formats">格式</a>
+      <a href="#download">下载</a>
+      <a class="github-link" href="https://github.com/1737894252/AstraView">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="eyebrow"><span></span> 专为 Windows 10 / 11 打造</div>
+      <h1>看见每一种<br><em>创作格式。</em></h1>
+      <p class="hero-copy">快速浏览照片、PSD、相机 RAW 与 PDF。简洁的沉浸式界面，加上原生 Windows 资源管理器缩略图支持。</p>
+      <div class="hero-actions">
+        <a class="primary-button download-link" href="https://github.com/1737894252/AstraView/releases/latest">
+          <span class="download-icon">↓</span>
+          <span><strong>下载 AstraView</strong><small><span class="version-text">最新版</span> · Windows x64</small></span>
+        </a>
+        <a class="secondary-button" href="https://github.com/1737894252/AstraView">查看源代码</a>
+      </div>
+      <p class="hero-note">免费开源 · 离线安装 · 内含 .NET Framework 4.8</p>
+
+      <div class="app-window">
+        <div class="window-glow" aria-hidden="true"></div>
+        <img src="assets/astraview-preview.png" alt="AstraView 图片查看器界面，展示主图和底部文件夹缩略图">
+      </div>
+    </section>
+
+    <section class="quick-facts" aria-label="产品特点">
+      <div><strong>50+</strong><span>图片与设计格式</span></div>
+      <div><strong>Q8</strong><span>低内存图像处理</span></div>
+      <div><strong>Explorer</strong><span>原生缩略图扩展</span></div>
+      <div><strong>Offline</strong><span>完整离线安装</span></div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="section-heading">
+        <p>核心体验</p>
+        <h2>浏览应该简单，<br>格式不该成为障碍。</h2>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card feature-large">
+          <div class="card-icon">✦</div>
+          <h3>专业格式，直接打开</h3>
+          <p>查看 PSD/PSB 合成图、相机 RAW、HEIC、AVIF、WebP、PDF 等格式，无需为了预览而打开重量级编辑软件。</p>
+          <div class="format-cloud" aria-hidden="true">
+            <span>PSD</span><span>RAW</span><span>HEIC</span><span>AVIF</span><span>PDF</span><span>WEBP</span>
+          </div>
+        </article>
+        <article class="feature-card">
+          <div class="card-icon">▦</div>
+          <h3>文件夹快速浏览</h3>
+          <p>并行生成缩略图，复用 Windows 与本地缓存；子目录、最近目录和内容变化自动刷新一应俱全。</p>
+        </article>
+        <article class="feature-card">
+          <div class="card-icon">◫</div>
+          <h3>融入资源管理器</h3>
+          <p>为 PSD、PDF 等格式提供 Explorer 缩略图，也可通过双击或右键“使用 AstraView 打开”。</p>
+        </article>
+        <article class="feature-card">
+          <div class="card-icon">↻</div>
+          <h3>应用内更新</h3>
+          <p>检查、下载、校验并覆盖安装新版本，全程无需再次寻找安装包。</p>
+        </article>
+        <article class="feature-card">
+          <div class="card-icon">⌁</div>
+          <h3>轻盈而克制</h3>
+          <p>Magick.NET Q8、按需解码和受控并发，在速度、清晰度与内存占用之间取得平衡。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section formats-section" id="formats">
+      <div class="section-heading compact">
+        <p>广泛兼容</p>
+        <h2>从日常照片到设计源文件。</h2>
+      </div>
+      <div class="formats-list">
+        <div><span>日常图片</span><p>JPEG · PNG · GIF · BMP · ICO · TIFF</p></div>
+        <div><span>现代格式</span><p>WebP · AVIF · HEIC / HEIF · SVG</p></div>
+        <div><span>设计与专业</span><p>PSD / PSB · EXR · DDS · TGA · PDF</p></div>
+        <div><span>相机 RAW</span><p>CR2 / CR3 · NEF · ARW · DNG · RAF · RW2 · ORF</p></div>
+      </div>
+    </section>
+
+    <section class="download-section" id="download">
+      <div>
+        <p class="section-kicker">准备好了吗？</p>
+        <h2>让图片回归浏览本身。</h2>
+        <p>下载完整离线安装包，几分钟内开始使用。</p>
+      </div>
+      <div class="download-panel">
+        <img src="https://raw.githubusercontent.com/1737894252/AstraView/main/assets/astraview-icon-512.png" alt="AstraView 图标">
+        <div class="download-meta">
+          <strong>AstraView <span class="version-text">最新版</span></strong>
+          <span>Windows 10 / 11 · x64</span>
+          <span class="file-size">离线安装包</span>
+        </div>
+        <a class="primary-button compact-button download-link" href="https://github.com/1737894252/AstraView/releases/latest">立即下载 ↓</a>
+        <p class="checksum">SHA-256：<code class="sha-text">从发布清单读取</code></p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <a class="brand footer-brand" href="#top">
+      <img src="https://raw.githubusercontent.com/1737894252/AstraView/main/assets/astraview-icon-512.png" alt="">
+      <span>AstraView</span>
+    </a>
+    <p>为 Windows 打造的现代图片查看器。</p>
+    <div><a href="https://github.com/1737894252/AstraView">GitHub</a><a href="https://github.com/1737894252/AstraView/releases">Releases</a><a href="https://github.com/1737894252/AstraView/issues">反馈问题</a></div>
+  </footer>
+</body>
+</html>
