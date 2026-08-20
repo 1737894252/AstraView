@@ -13,3 +13,4 @@ installer/redist/*.exe
 /*.psb
 /*.pdf
 /*.json
+!/update.json

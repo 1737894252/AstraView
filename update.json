@@ -1,0 +1,9 @@
+{
+  "version": "1.1.1",
+  "releaseName": "AstraView 1.1.1",
+  "releaseNotes": "修复检查更新触发 GitHub API rate limit exceeded 的问题，改用无 API 配额依赖的静态更新清单。",
+  "downloadUrl": "https://github.com/1737894252/AstraView/releases/download/v1.1.1/AstraView-Setup-1.1.1-x64.exe",
+  "fileName": "AstraView-Setup-1.1.1-x64.exe",
+  "sha256": "CF3F3135FF02B751937B6D4B85588206154A3E4BF478C8C446B37A89CE341A41",
+  "size": 138189987
+}

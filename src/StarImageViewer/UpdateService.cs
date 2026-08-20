@@ -28,6 +28,7 @@ internal sealed class UpdateInfo
 
 internal static class UpdateService
 {
+    private const string UpdateManifestUrl = "https://raw.githubusercontent.com/1737894252/AstraView/main/update.json";
     private const string LatestReleaseApi = "https://api.github.com/repos/1737894252/AstraView/releases/latest";
     private const string InstallerPrefix = "AstraView-Setup-";
     private static readonly HttpClient Client = CreateClient();
@@ -37,12 +38,28 @@ internal static class UpdateService
 
     public static async Task<UpdateInfo?> CheckAsync(CancellationToken cancellationToken)
     {
+        try
+        {
+            return await CheckManifestAsync(cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            // Keep the GitHub API as a compatibility fallback, but normal update checks do not spend
+            // the anonymous API quota shared by users behind the same public IP address.
+        }
+        catch (InvalidDataException)
+        {
+            // A temporarily incomplete manifest must not permanently disable the fallback channel.
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseApi);
         AddPrivateRepositoryToken(request);
         using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new InvalidOperationException("更新服务当前不可公开访问。请确认 GitHub 仓库已公开，或为测试环境设置 ASTRAVIEW_GITHUB_TOKEN。");
 
+        if (response.StatusCode == (HttpStatusCode)429 || response.StatusCode == HttpStatusCode.Forbidden)
+            throw new InvalidOperationException("GitHub 更新接口暂时限流，请稍后重试。");
         response.EnsureSuccessStatusCode();
         var release = ReadJson<GitHubRelease>(await response.Content.ReadAsStreamAsync());
         if (release.Draft || release.Prerelease || !TryParseVersion(release.TagName, out var version)) return null;
@@ -66,6 +83,34 @@ internal static class UpdateService
         };
     }
 
+    private static async Task<UpdateInfo?> CheckManifestAsync(CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, UpdateManifestUrl);
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
+        using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var manifest = ReadJson<UpdateManifest>(await response.Content.ReadAsStreamAsync());
+        if (!TryParseVersion(manifest.Version, out var version) ||
+            string.IsNullOrWhiteSpace(manifest.DownloadUrl) ||
+            string.IsNullOrWhiteSpace(manifest.FileName))
+            throw new InvalidDataException("更新清单格式无效。");
+
+        return new UpdateInfo
+        {
+            Version = version,
+            TagName = "v" + version.ToString(3),
+            ReleaseName = string.IsNullOrWhiteSpace(manifest.ReleaseName)
+                ? "AstraView " + version.ToString(3) : manifest.ReleaseName,
+            ReleaseNotes = manifest.ReleaseNotes ?? string.Empty,
+            DownloadUrl = manifest.DownloadUrl,
+            FileName = manifest.FileName,
+            Sha256 = NormalizeDigest(manifest.Sha256),
+            Size = manifest.Size
+        };
+    }
+
     public static bool IsNewer(UpdateInfo update) => update.Version.CompareTo(CurrentVersion) > 0;
 
     public static async Task<string> DownloadAsync(
@@ -79,10 +124,10 @@ internal static class UpdateService
         var destination = Path.Combine(updateDirectory, update.FileName);
         var partial = destination + ".download";
 
+        var hasPrivateAssetApi = !string.IsNullOrWhiteSpace(update.ApiUrl) &&
+            !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASTRAVIEW_GITHUB_TOKEN"));
         using var request = new HttpRequestMessage(HttpMethod.Get,
-            string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASTRAVIEW_GITHUB_TOKEN"))
-                ? update.DownloadUrl
-                : update.ApiUrl);
+            hasPrivateAssetApi ? update.ApiUrl : update.DownloadUrl);
         request.Headers.Accept.ParseAdd("application/octet-stream");
         AddPrivateRepositoryToken(request);
         using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -168,6 +213,18 @@ internal static class UpdateService
         using var stream = File.OpenRead(path);
         var actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", string.Empty);
         return actual.Equals(expected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [DataContract]
+    private sealed class UpdateManifest
+    {
+        [DataMember(Name = "version")] public string Version { get; set; } = string.Empty;
+        [DataMember(Name = "releaseName")] public string ReleaseName { get; set; } = string.Empty;
+        [DataMember(Name = "releaseNotes")] public string? ReleaseNotes { get; set; }
+        [DataMember(Name = "downloadUrl")] public string DownloadUrl { get; set; } = string.Empty;
+        [DataMember(Name = "fileName")] public string FileName { get; set; } = string.Empty;
+        [DataMember(Name = "sha256")] public string Sha256 { get; set; } = string.Empty;
+        [DataMember(Name = "size")] public long Size { get; set; }
     }
 
     [DataContract]
