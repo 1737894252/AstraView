@@ -102,6 +102,13 @@
                                 <TextBlock Text="最近" Margin="7,0,0,0" FontWeight="SemiBold" />
                             </StackPanel>
                         </Button>
+                        <Button x:Name="UpdateButton" Style="{StaticResource ToolbarButton}" Click="CheckUpdates_Click"
+                                ToolTip="检查更新">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="14" />
+                                <TextBlock Text="更新" Margin="7,0,0,0" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Button>
                         <Button Style="{StaticResource ToolbarButton}" Content="&#xE76B;" FontFamily="Segoe MDL2 Assets"
                                 FontSize="16" Click="Previous_Click" ToolTip="上一张 (←)" />
                         <Button Style="{StaticResource ToolbarButton}" Content="&#xE76C;" FontFamily="Segoe MDL2 Assets"

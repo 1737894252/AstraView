@@ -19,6 +19,12 @@ namespace StarImageViewer;
 
 public partial class MainWindow : Window
 {
+    private const int FolderThumbnailDecodeSize = 96;
+    private static readonly int StandardThumbnailConcurrency =
+        Math.Max(2, Math.Min(6, Environment.ProcessorCount - 1));
+    private static readonly SemaphoreSlim StandardThumbnailGate =
+        new(StandardThumbnailConcurrency, StandardThumbnailConcurrency);
+    private static readonly SemaphoreSlim HeavyThumbnailGate = new(1, 1);
     private string? currentPath;
     private List<string> siblings = new();
     private double zoom = 1;
@@ -109,18 +115,20 @@ public partial class MainWindow : Window
         // WIC handles these formats natively and avoids Magick decode -> PNG encode -> WPF decode.
         var extension = Path.GetExtension(path);
         if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".jpe", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".jfif", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".gif", StringComparison.OrdinalIgnoreCase) ||
-            extension.Equals(".ico", StringComparison.OrdinalIgnoreCase))
+            extension.Equals(".ico", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
             return DecodeWithWindowsImaging(path);
 
-        var bytes = ImageDecoder.DecodeForDisplay(path);
-        using var stream = new MemoryStream(bytes);
-        var converted = new BitmapImage();
-        converted.BeginInit();
-        converted.CacheOption = BitmapCacheOption.OnLoad;
-        converted.StreamSource = stream;
-        converted.EndInit();
+        var decoded = ImageDecoder.DecodeForDisplayWithSize(path);
+        var converted = BitmapSource.Create(checked((int)decoded.Width), checked((int)decoded.Height),
+            96, 96, PixelFormats.Bgra32, null, decoded.Pixels, checked((int)decoded.Width * 4));
         converted.Freeze();
         return converted;
     }
@@ -182,9 +190,14 @@ public partial class MainWindow : Window
         try
         {
             folder = Path.GetFullPath(folder);
-            images = Directory.EnumerateFiles(folder).Where(SupportedFormats.IsSupported)
-                .OrderBy(x => x, StringComparer.CurrentCultureIgnoreCase).ToList();
-            subfolders = EnumerateBrowsableDirectories(folder);
+            var snapshot = await Task.Run(() => new
+            {
+                Images = Directory.EnumerateFiles(folder).Where(SupportedFormats.IsSupported)
+                    .OrderBy(x => x, StringComparer.CurrentCultureIgnoreCase).ToList(),
+                Subfolders = EnumerateBrowsableDirectories(folder)
+            });
+            images = snapshot.Images;
+            subfolders = snapshot.Subfolders;
         }
         catch (Exception ex)
         {
@@ -212,9 +225,12 @@ public partial class MainWindow : Window
         FilmstripRow.Height = new GridLength(128);
         ThumbnailPanel.Children.Clear();
         PopulateDirectoryEntries(folder, subfolders);
+        // Start the filmstrip before decoding the first full-size image. A highly compressed PNG can
+        // be only a few megabytes on disk yet expand to hundreds of megabytes, and must not block the
+        // user's first visual feedback from the folder.
+        _ = PopulateThumbnailsAsync(images, thumbnailCancellation.Token);
         if (images.Count > 0) await LoadImageAsync(images[0]);
         else ClearPictureForFolder();
-        _ = PopulateThumbnailsAsync(images, thumbnailCancellation.Token);
     }
 
     private void SetupFolderWatcher(string folder)
@@ -368,21 +384,13 @@ public partial class MainWindow : Window
 
     private async Task PopulateThumbnailsAsync(IEnumerable<string> images, CancellationToken cancellationToken)
     {
+        var pending = new List<Task>();
+        var itemNumber = 0;
         foreach (var imagePath in images)
         {
             if (cancellationToken.IsCancellationRequested) return;
-            BitmapSource thumbnail;
-            try
-            {
-                thumbnail = await Task.Run(() => DecodeThumbnail(imagePath), cancellationToken);
-            }
-            catch when (cancellationToken.IsCancellationRequested) { return; }
-            catch { continue; }
-
-            if (cancellationToken.IsCancellationRequested) return;
             var preview = new Image
             {
-                Source = thumbnail,
                 Width = 82,
                 Height = 64,
                 Stretch = Stretch.Uniform,
@@ -415,11 +423,55 @@ public partial class MainWindow : Window
             };
             button.Click += async (_, __) => await LoadImageAsync((string)button.Tag);
             ThumbnailPanel.Children.Add(button);
+            pending.Add(LoadThumbnailIntoAsync(imagePath, preview, cancellationToken));
+            if (++itemNumber % 50 == 0)
+                await System.Windows.Threading.Dispatcher.Yield(
+                    System.Windows.Threading.DispatcherPriority.Background);
+        }
+        try { await Task.WhenAll(pending); }
+        catch (OperationCanceledException) { }
+    }
+
+    private static async Task LoadThumbnailIntoAsync(string path, Image target, CancellationToken cancellationToken)
+    {
+        var gate = IsHeavyThumbnail(path) ? HeavyThumbnailGate : StandardThumbnailGate;
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            var thumbnail = await Task.Run(() => DecodeThumbnail(path), cancellationToken);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                target.Source = thumbnail;
+                _ = ThumbnailCache.StoreInBackgroundAsync(path, FolderThumbnailDecodeSize, thumbnail);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+        finally { gate.Release(); }
+    }
+
+    private static bool IsHeavyThumbnail(string path)
+    {
+        switch (Path.GetExtension(path).ToLowerInvariant())
+        {
+            case ".psd": case ".psb": case ".pdf":
+            case ".3fr": case ".arw": case ".cr2": case ".cr3": case ".crw":
+            case ".dcr": case ".dng": case ".erf": case ".kdc": case ".mos":
+            case ".mrw": case ".nef": case ".nrw": case ".orf": case ".pef":
+            case ".raf": case ".raw": case ".rw2": case ".rwl": case ".sr2":
+            case ".srf": case ".x3f": return true;
+            default: return false;
         }
     }
 
     private static BitmapSource DecodeThumbnail(string path)
     {
+        const int requestedSize = FolderThumbnailDecodeSize;
+        var cached = ThumbnailCache.TryGet(path, requestedSize);
+        if (cached != null) return cached;
+        var shellCached = ShellThumbnail.TryGetFromMemoryCache(path, requestedSize);
+        if (shellCached != null) return shellCached;
+
         var extension = Path.GetExtension(path);
         if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
@@ -434,20 +486,27 @@ public partial class MainWindow : Window
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.DecodePixelWidth = 180;
+            using (var headerStream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                var decoder = BitmapDecoder.Create(headerStream, BitmapCreateOptions.DelayCreation,
+                    BitmapCacheOption.None);
+                if (decoder.Frames[0].PixelWidth >= decoder.Frames[0].PixelHeight)
+                    bitmap.DecodePixelWidth = requestedSize;
+                else
+                    bitmap.DecodePixelHeight = requestedSize;
+            }
             bitmap.StreamSource = stream;
             bitmap.EndInit();
             bitmap.Freeze();
             return bitmap;
         }
 
-        var bytes = ImageDecoder.DecodeForDisplay(path, 220);
-        using var convertedStream = new MemoryStream(bytes);
-        var converted = new BitmapImage();
-        converted.BeginInit();
-        converted.CacheOption = BitmapCacheOption.OnLoad;
-        converted.StreamSource = convertedStream;
-        converted.EndInit();
+        using var input = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.SequentialScan);
+        var decoded = ImageDecoder.DecodeThumbnailWithSize(input, requestedSize);
+        var converted = BitmapSource.Create(checked((int)decoded.Width), checked((int)decoded.Height),
+            96, 96, PixelFormats.Bgra32, null, decoded.Pixels, checked((int)decoded.Width * 4));
         converted.Freeze();
         return converted;
     }
@@ -541,6 +600,55 @@ public partial class MainWindow : Window
             SaveRecentFolders();
         };
         RecentFoldersMenu.Items.Add(clearItem);
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        if (!UpdateButton.IsEnabled) return;
+        UpdateButton.IsEnabled = false;
+        var originalStatus = StatusText.Text;
+        try
+        {
+            StatusText.Text = "正在检查更新…";
+            var update = await UpdateService.CheckAsync(CancellationToken.None);
+            if (update == null || !UpdateService.IsNewer(update))
+            {
+                StatusText.Text = $"已是最新版本 {UpdateService.CurrentVersion.ToString(3)}";
+                MessageBox.Show($"当前已是最新版本 {UpdateService.CurrentVersion.ToString(3)}。",
+                    "AstraView 更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var sizeText = update.Size > 0 ? $"\n下载大小：{update.Size / 1024d / 1024d:F1} MB" : string.Empty;
+            var answer = MessageBox.Show(
+                $"发现新版本 {update.Version.ToString(3)}（当前 {UpdateService.CurrentVersion.ToString(3)}）。{sizeText}\n\n现在下载并自动安装吗？",
+                "AstraView 更新", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (answer != MessageBoxResult.Yes)
+            {
+                StatusText.Text = originalStatus;
+                return;
+            }
+
+            var progress = new Progress<int>(value => StatusText.Text = $"正在下载更新… {value}%");
+            var installer = await UpdateService.DownloadAsync(update, progress, CancellationToken.None);
+            StatusText.Text = "下载完成，正在启动更新…";
+            UpdateService.StartInstaller(installer);
+            Application.Current.Shutdown();
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            StatusText.Text = "已取消安装更新";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = originalStatus;
+            MessageBox.Show($"检查或安装更新失败：\n\n{ex.Message}",
+                "AstraView 更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            UpdateButton.IsEnabled = true;
+        }
     }
 
     private void LoadRecentFolders()

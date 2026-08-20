@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-1.0.0-x64
+OutputBaseFilename=AstraView-Setup-1.1.0-x64
 SetupIconFile=..\src\StarImageViewer\astraview.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

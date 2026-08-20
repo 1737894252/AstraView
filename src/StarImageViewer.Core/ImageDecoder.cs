@@ -35,6 +35,21 @@ public static class ImageDecoder
         return image.ToByteArray();
     }
 
+    public static ThumbnailData DecodeForDisplayWithSize(string path, uint maxDimension = 8192)
+    {
+        if (Path.GetExtension(path).Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            using var pdf = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            var rendered = RenderPdfFirstPage(pdf, Math.Min(maxDimension, 4096));
+            using var pdfImage = new MagickImage(rendered);
+            return ToBgraData(pdfImage, maxDimension);
+        }
+
+        using var image = ReadFirstUsefulFrame(path);
+        return ToBgraData(image, maxDimension);
+    }
+
     public static byte[] DecodeThumbnail(Stream input, uint requestedSize)
     {
         return DecodeThumbnailWithSize(input, requestedSize).Pixels;
@@ -50,11 +65,7 @@ public static class ImageDecoder
     {
         if (requestedSize == 0) throw new ArgumentOutOfRangeException(nameof(requestedSize));
         using var image = ReadFirstUsefulFrame(input, requestedSize);
-        Prepare(image, requestedSize, requestedSize);
-        var width = image.Width;
-        var height = image.Height;
-        image.Format = MagickFormat.Bgra;
-        return new ThumbnailData(image.ToByteArray(), width, height);
+        return ToBgraData(image, requestedSize);
     }
 
     private static MagickImage ReadFirstUsefulFrame(string path)
@@ -116,5 +127,14 @@ public static class ImageDecoder
             image.FilterType = FilterType.Lanczos;
             image.Resize(new MagickGeometry(maxWidth, maxHeight) { IgnoreAspectRatio = false });
         }
+    }
+
+    private static ThumbnailData ToBgraData(MagickImage image, uint maxDimension)
+    {
+        Prepare(image, maxDimension, maxDimension);
+        var width = image.Width;
+        var height = image.Height;
+        image.Format = MagickFormat.Bgra;
+        return new ThumbnailData(image.ToByteArray(), width, height);
     }
 }

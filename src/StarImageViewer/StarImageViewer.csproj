@@ -9,8 +9,8 @@
     <AssemblyTitle>AstraView</AssemblyTitle>
     <Product>AstraView</Product>
     <Company>AstraView</Company>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="astraview.ico" />
@@ -19,5 +19,6 @@
   <ItemGroup>
     <ProjectReference Include="..\StarImageViewer.Core\StarImageViewer.Core.csproj" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 </Project>
