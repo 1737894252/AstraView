@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $configuration = 'Release'
-$stage = Join-Path $root 'artifacts\native-package'
+$stage = Join-Path $root 'artifacts\native-package-2.0.0-preview.3'
 $nativeProject = Join-Path $root 'src\AstraView.Native\AstraView.Native.vcxproj'
 $providerProject = Join-Path $root 'src\StarImageViewer.NativeThumbnailProvider\StarImageViewer.NativeThumbnailProvider.vcxproj'
 $msbuild = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe'

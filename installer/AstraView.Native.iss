@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "2.0.0-preview.2"
+#define MyAppVersion "2.0.0-preview.3"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-2.0.0-preview.2-x64
+OutputBaseFilename=AstraView-Setup-2.0.0-preview.3-x64
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -25,7 +25,7 @@ ChangesAssociations=yes
 DisableProgramGroupPage=yes
 
 [Files]
-Source: "..\artifacts\native-package\*"; DestDir: "{app}"; Excludes: "*.pdb;*.map"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\artifacts\native-package-2.0.0-preview.3\*"; DestDir: "{app}"; Excludes: "*.pdb;*.map"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

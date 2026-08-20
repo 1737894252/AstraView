@@ -327,6 +327,7 @@ public:
         imageHeight_ = height;
         imagePath_ = path;
         imageBitmap_.Reset();
+        if (target_) RecreateImageBitmap();
         FitImage();
         const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
         SetStatus(std::to_wstring(width) + L" × " + std::to_wstring(height) + position);
@@ -421,16 +422,16 @@ private:
         }
         if (HandleThumbnailClick(x, y)) return;
         if (y < 0 || y > static_cast<int>(kToolbarHeight)) return;
-        if (x >= 158 && x < 274) OpenFileDialog(false);
-        else if (x >= 286 && x < 410) OpenFileDialog(true);
-        else if (x >= 422 && x < 490) OpenRecentMenu();
-        else if (x >= 502 && x < 544) OpenRelativeImage(-1);
-        else if (x >= 550 && x < 592) OpenRelativeImage(1);
-        else if (x >= 604 && x < 666) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 678 && x < 730) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 742 && x < 802) RotateClockwise();
-        else if (x >= 814 && x < 882) ToggleFullscreen();
-        else if (x >= 894 && x < 962) StartUpdateCheck();
+        if (x >= 58 && x < 112) OpenFileDialog(false);
+        else if (x >= 118 && x < 188) OpenFileDialog(true);
+        else if (x >= 194 && x < 250) OpenRecentMenu();
+        else if (x >= 270 && x < 302) OpenRelativeImage(-1);
+        else if (x >= 308 && x < 340) OpenRelativeImage(1);
+        else if (x >= 360 && x < 406) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 412 && x < 456) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 462 && x < 516) RotateClockwise();
+        else if (x >= 522 && x < 578) ToggleFullscreen();
+        else if (x >= 584 && x < 638) StartUpdateCheck();
     }
 
     LRESULT HitTest(int screenX, int screenY) const
@@ -452,11 +453,11 @@ private:
         }
         if (point.y >= 0 && point.y < static_cast<int>(kToolbarHeight))
         {
-            if ((point.x >= 158 && point.x < 274) || (point.x >= 286 && point.x < 410) || (point.x >= 422 && point.x < 490) ||
-                (point.x >= 502 && point.x < 544) || (point.x >= 550 && point.x < 592) ||
-                (point.x >= 604 && point.x < 666) || (point.x >= 678 && point.x < 730) ||
-                (point.x >= 742 && point.x < 802) || (point.x >= 814 && point.x < 882) ||
-                (point.x >= 894 && point.x < 962) || point.x >= client.right - 144)
+            if ((point.x >= 58 && point.x < 112) || (point.x >= 118 && point.x < 188) || (point.x >= 194 && point.x < 250) ||
+                (point.x >= 270 && point.x < 302) || (point.x >= 308 && point.x < 340) ||
+                (point.x >= 360 && point.x < 406) || (point.x >= 412 && point.x < 456) ||
+                (point.x >= 462 && point.x < 516) || (point.x >= 522 && point.x < 578) ||
+                (point.x >= 584 && point.x < 638) || point.x >= client.right - 144)
                 return HTCLIENT;
             return HTCAPTION;
         }
@@ -563,6 +564,7 @@ private:
         imageSource_ = rotated;
         std::swap(imageWidth_, imageHeight_);
         imageBitmap_.Reset();
+        if (target_) RecreateImageBitmap();
         FitImage();
         SetStatus(L"已顺时针旋转 90°  ·  " + ZoomStatus());
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -722,7 +724,7 @@ private:
             for (size_t index = 0; index < recentFolders_.size(); ++index)
                 AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(1000 + index), recentFolders_[index].c_str());
         }
-        POINT point{ 422, static_cast<LONG>(kToolbarHeight) }; ClientToScreen(hwnd_, &point);
+        POINT point{ 194, static_cast<LONG>(kToolbarHeight) }; ClientToScreen(hwnd_, &point);
         const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, point.x, point.y, 0, hwnd_, nullptr);
         DestroyMenu(menu);
         if (command >= 1000 && command < 1000 + recentFolders_.size()) OpenPath(recentFolders_[command - 1000]);
@@ -752,6 +754,7 @@ private:
         if (FAILED(wic_->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(pdfPixels_.size()), pdfPixels_.data(), &source))) return false;
         imageSource_ = source;
         imageWidth_ = width; imageHeight_ = height; imagePath_ = path; pendingImagePath_.clear(); imageBitmap_.Reset();
+        if (target_) RecreateImageBitmap();
         FitImage();
         const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
         SetStatus(L"PDF  " + std::to_wstring(width) + L" × " + std::to_wstring(height) + position);
@@ -790,6 +793,7 @@ private:
         ComPtr<IWICBitmap> source;
         if (FAILED(wic_->CreateBitmapFromMemory(static_cast<UINT>(width), static_cast<UINT>(height), GUID_WICPixelFormat32bppPBGRA, static_cast<UINT>(width * 4), static_cast<UINT>(magickPixels_.size()), magickPixels_.data(), &source))) return false;
         imageSource_ = source; imageWidth_ = static_cast<UINT>(width); imageHeight_ = static_cast<UINT>(height); imagePath_ = path; pendingImagePath_.clear(); imageBitmap_.Reset();
+        if (target_) RecreateImageBitmap();
         FitImage(); SetStatus(L"ImageMagick  " + std::to_wstring(width) + L" × " + std::to_wstring(height)); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE);
         return true;
     }
@@ -916,6 +920,7 @@ private:
         imagePath_ = pixels->path;
         if (pixels->highResolution) pendingImagePath_.clear();
         imageBitmap_.Reset();
+        if (target_) RecreateImageBitmap();
         if (!pixels->highResolution || !userAdjustedView_) FitImage();
         else if (oldWidth) scale_ = oldScale * static_cast<float>(oldWidth) / imageWidth_;
         const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
@@ -1243,6 +1248,7 @@ private:
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.28f, 0.65f, 1.0f), &accentBrush_))) return false;
         if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"zh-CN", &textFormat_))) return false;
         textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         return RecreateImageBitmap();
     }
 
@@ -1295,8 +1301,7 @@ private:
 
     void DrawButton(const wchar_t* text, float left, float width)
     {
-        const D2D1_RECT_F rect = D2D1::RectF(left, 10.0f, left + width, 46.0f);
-        target_->DrawRoundedRectangle(D2D1::RoundedRect(rect, 6.0f, 6.0f), accentBrush_.Get(), 1.0f);
+        const D2D1_RECT_F rect = D2D1::RectF(left, 0.0f, left + width, kToolbarHeight);
         target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
     }
 
@@ -1315,20 +1320,22 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0.045f, 0.055f, 0.075f));
         target_->FillRectangle(D2D1::RectF(0, 0, size.width, kToolbarHeight), toolbarBrush_.Get());
-        DrawButton(L"✦  AstraView", 14.0f, 132.0f);
-        DrawButton(L"打开  Ctrl+O", 158.0f, 116.0f);
-        DrawButton(L"文件夹  Ctrl+L", 286.0f, 132.0f);
-        DrawButton(L"最近", 422.0f, 68.0f);
-        DrawButton(L"‹", 502.0f, 42.0f);
-        DrawButton(L"›", 550.0f, 42.0f);
-        DrawButton(L"适应", 604.0f, 62.0f);
-        DrawButton(L"1:1", 678.0f, 52.0f);
-        DrawButton(L"旋转", 742.0f, 60.0f);
-        DrawButton(L"全屏", 814.0f, 68.0f);
-        DrawButton(L"更新", 894.0f, 68.0f);
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(28.0f, 29.0f), 15.0f, 15.0f), accentBrush_.Get());
+        DrawButton(L"✦", 14.0f, 28.0f);
+        DrawButton(L"打开", 58.0f, 54.0f);
+        DrawButton(L"文件夹", 118.0f, 70.0f);
+        DrawButton(L"最近", 194.0f, 56.0f);
+        DrawButton(L"‹", 270.0f, 32.0f);
+        DrawButton(L"›", 308.0f, 32.0f);
+        DrawButton(L"适应", 360.0f, 46.0f);
+        DrawButton(L"1:1", 412.0f, 44.0f);
+        DrawButton(L"旋转", 462.0f, 54.0f);
+        DrawButton(L"全屏", 522.0f, 56.0f);
+        DrawButton(L"更新", 584.0f, 54.0f);
         const std::wstring& displayPath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
         const std::wstring title = displayPath.empty() ? L"AstraView" : FileNameOf(displayPath);
-        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(974, 0, std::max(974.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(654, 0, std::max(654.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        target_->DrawLine(D2D1::Point2F(0, kToolbarHeight - 1.0f), D2D1::Point2F(size.width, kToolbarHeight - 1.0f), backgroundBrush_.Get(), 1.0f);
         DrawWindowButton(L"—", size.width - 144.0f, false);
         DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
         DrawWindowButton(L"×", size.width - 48.0f, true);
