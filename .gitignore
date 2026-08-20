@@ -5,6 +5,7 @@ artifacts/
 installer/redist/*.exe
 .dotnet-cli/
 .nuget/
+tools/vendor/
 *.user
 *.suo
 

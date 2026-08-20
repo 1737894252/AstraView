@@ -45,6 +45,47 @@ constexpr float kThumbnailHeight = 88.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
 std::once_flag kPdfiumInitialization;
 
+using MagickWandHandle = void;
+using MagickBoolean = int;
+std::mutex kMagickLoadMutex;
+
+struct MagickApi
+{
+    HMODULE module{};
+    void (*genesis)(){};
+    MagickWandHandle* (*create)(){};
+    MagickWandHandle* (*destroy)(MagickWandHandle*){};
+    MagickBoolean (*readFile)(MagickWandHandle*, const char*){};
+    size_t (*getWidth)(MagickWandHandle*){};
+    size_t (*getHeight)(MagickWandHandle*){};
+    MagickBoolean (*resize)(MagickWandHandle*, size_t, size_t, int, double){};
+    MagickBoolean (*exportPixels)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*){};
+
+    bool Load()
+    {
+        std::lock_guard lock(kMagickLoadMutex);
+        if (module) return true;
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        auto directory = fs::path(path).parent_path();
+        module = LoadLibraryW((directory / L"CORE_RL_MagickWand_.dll").c_str());
+        if (!module) return false;
+        genesis = reinterpret_cast<void (*)()>(GetProcAddress(module, "MagickWandGenesis"));
+        create = reinterpret_cast<MagickWandHandle* (*)()>(GetProcAddress(module, "NewMagickWand"));
+        destroy = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*)>(GetProcAddress(module, "DestroyMagickWand"));
+        readFile = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, const char*)>(GetProcAddress(module, "MagickReadImage"));
+        getWidth = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageWidth"));
+        getHeight = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageHeight"));
+        resize = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, size_t, size_t, int, double)>(GetProcAddress(module, "MagickResizeImage"));
+        exportPixels = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*)>(GetProcAddress(module, "MagickExportImagePixels"));
+        if (!genesis || !create || !destroy || !readFile || !getWidth || !getHeight || !resize || !exportPixels) return false;
+        genesis();
+        return true;
+    }
+};
+
+MagickApi kMagick;
+
 void EnsurePdfiumInitialized()
 {
     std::call_once(kPdfiumInitialization, [] { FPDF_InitLibrary(); });
@@ -68,7 +109,7 @@ struct ThumbnailPixels
 bool IsSupportedImage(const fs::path& path)
 {
     static const std::vector<std::wstring> extensions = {
-        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif", L".pdf" };
+        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif", L".pdf", L".psd", L".psb", L".raw", L".dng", L".cr2", L".nef", L".arw" };
     auto extension = path.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
     return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
@@ -183,6 +224,7 @@ public:
         if (SUCCEEDED(hr)) hr = decoder->GetFrame(0, &frame);
         if (FAILED(hr))
         {
+            if (OpenWithMagick(path)) return;
             SetStatus(L"无法解码：" + FileNameOf(path));
             MessageBeep(MB_ICONWARNING);
             return;
@@ -220,6 +262,7 @@ private:
         {
             self = static_cast<ViewerWindow*>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            return TRUE;
         }
         return self ? self->HandleMessage(message, wParam, lParam) : DefWindowProcW(hwnd, message, wParam, lParam);
     }
@@ -415,6 +458,40 @@ private:
         return true;
     }
 
+    bool OpenWithMagick(const std::wstring& path)
+    {
+        if (!kMagick.Load()) return false;
+        MagickWandHandle* wand = kMagick.create();
+        if (!wand) return false;
+        const std::string utf8Path = ToUtf8(path);
+        if (!kMagick.readFile(wand, utf8Path.c_str())) { kMagick.destroy(wand); return false; }
+        size_t width = kMagick.getWidth(wand), height = kMagick.getHeight(wand);
+        if (!width || !height) { kMagick.destroy(wand); return false; }
+        constexpr size_t maximumDimension = 8192;
+        if (width > maximumDimension || height > maximumDimension)
+        {
+            const double scale = std::min(static_cast<double>(maximumDimension) / width, static_cast<double>(maximumDimension) / height);
+            width = static_cast<size_t>(width * scale); height = static_cast<size_t>(height * scale);
+            if (!kMagick.resize(wand, width, height, 22, 1.0)) { kMagick.destroy(wand); return false; }
+        }
+        magickPixels_.resize(width * height * 4);
+        const bool exported = kMagick.exportPixels(wand, 0, 0, width, height, "BGRA", 1, magickPixels_.data()) != 0;
+        kMagick.destroy(wand);
+        if (!exported) { magickPixels_.clear(); return false; }
+        for (size_t index = 0; index < magickPixels_.size(); index += 4)
+        {
+            const BYTE alpha = magickPixels_[index + 3];
+            magickPixels_[index] = static_cast<BYTE>((magickPixels_[index] * alpha + 127) / 255);
+            magickPixels_[index + 1] = static_cast<BYTE>((magickPixels_[index + 1] * alpha + 127) / 255);
+            magickPixels_[index + 2] = static_cast<BYTE>((magickPixels_[index + 2] * alpha + 127) / 255);
+        }
+        ComPtr<IWICBitmap> source;
+        if (FAILED(wic_->CreateBitmapFromMemory(static_cast<UINT>(width), static_cast<UINT>(height), GUID_WICPixelFormat32bppPBGRA, static_cast<UINT>(width * 4), static_cast<UINT>(magickPixels_.size()), magickPixels_.data(), &source))) return false;
+        imageSource_ = source; imageWidth_ = static_cast<UINT>(width); imageHeight_ = static_cast<UINT>(height); imagePath_ = path; imageBitmap_.Reset();
+        FitImage(); SetStatus(L"ImageMagick  " + std::to_wstring(width) + L" × " + std::to_wstring(height)); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE);
+        return true;
+    }
+
     void StartThumbnailWorker()
     {
         thumbnailWorker_ = std::thread([this]
@@ -502,7 +579,8 @@ private:
         }
         ComPtr<IWICBitmapDecoder> decoder;
         ComPtr<IWICBitmapFrameDecode> frame;
-        if (FAILED(factory->CreateDecoderFromFilename(task.path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) || FAILED(decoder->GetFrame(0, &frame))) return nullptr;
+        if (FAILED(factory->CreateDecoderFromFilename(task.path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) || FAILED(decoder->GetFrame(0, &frame)))
+            return DecodeMagickThumbnail(task);
         UINT width = 0, height = 0; frame->GetSize(&width, &height);
         if (!width || !height) return nullptr;
         const float ratio = std::min(kThumbnailWidth / width, kThumbnailHeight / height);
@@ -516,6 +594,35 @@ private:
         result->generation = task.generation; result->index = task.index; result->width = scaledWidth; result->height = scaledHeight;
         result->pixels.resize(static_cast<size_t>(scaledWidth) * scaledHeight * 4);
         if (FAILED(converter->CopyPixels(nullptr, scaledWidth * 4, static_cast<UINT>(result->pixels.size()), result->pixels.data()))) return nullptr;
+        return result.release();
+    }
+
+    static ThumbnailPixels* DecodeMagickThumbnail(const ThumbnailTask& task)
+    {
+        if (!kMagick.Load()) return nullptr;
+        MagickWandHandle* wand = kMagick.create();
+        if (!wand) return nullptr;
+        const std::string utf8Path = ToUtf8(task.path);
+        if (!kMagick.readFile(wand, utf8Path.c_str())) { kMagick.destroy(wand); return nullptr; }
+        const size_t sourceWidth = kMagick.getWidth(wand), sourceHeight = kMagick.getHeight(wand);
+        if (!sourceWidth || !sourceHeight) { kMagick.destroy(wand); return nullptr; }
+        const double scale = std::min(static_cast<double>(kThumbnailWidth) / sourceWidth, static_cast<double>(kThumbnailHeight) / sourceHeight);
+        const size_t width = std::max<size_t>(1, static_cast<size_t>(sourceWidth * scale));
+        const size_t height = std::max<size_t>(1, static_cast<size_t>(sourceHeight * scale));
+        if (!kMagick.resize(wand, width, height, 22, 1.0)) { kMagick.destroy(wand); return nullptr; }
+        auto result = std::make_unique<ThumbnailPixels>();
+        result->generation = task.generation; result->index = task.index; result->width = static_cast<UINT>(width); result->height = static_cast<UINT>(height);
+        result->pixels.resize(width * height * 4);
+        const bool exported = kMagick.exportPixels(wand, 0, 0, width, height, "BGRA", 1, result->pixels.data()) != 0;
+        kMagick.destroy(wand);
+        if (!exported) return nullptr;
+        for (size_t index = 0; index < result->pixels.size(); index += 4)
+        {
+            const BYTE alpha = result->pixels[index + 3];
+            result->pixels[index] = static_cast<BYTE>((result->pixels[index] * alpha + 127) / 255);
+            result->pixels[index + 1] = static_cast<BYTE>((result->pixels[index + 1] * alpha + 127) / 255);
+            result->pixels[index + 2] = static_cast<BYTE>((result->pixels[index + 2] * alpha + 127) / 255);
+        }
         return result.release();
     }
 
@@ -630,6 +737,7 @@ private:
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, folderPath_, status_;
     std::vector<BYTE> pdfPixels_;
+    std::vector<BYTE> magickPixels_;
     std::vector<std::wstring> images_;
     std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
     std::thread thumbnailWorker_;
