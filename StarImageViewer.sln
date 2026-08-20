@@ -6,7 +6,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer.Core", "src
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer", "src\StarImageViewer\StarImageViewer.csproj", "{6F5B8A67-98E7-421A-BAC4-E96981A1B883}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer.ThumbnailProvider", "src\StarImageViewer.ThumbnailProvider\StarImageViewer.ThumbnailProvider.csproj", "{7E92F8F5-C660-4971-B34B-470CBB24248B}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StarImageViewer.ThumbnailWorker", "src\StarImageViewer.ThumbnailWorker\StarImageViewer.ThumbnailWorker.csproj", "{E5F6BDEA-B86A-4D23-AC2D-320D60966911}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "StarImageViewer.NativeThumbnailProvider", "src\StarImageViewer.NativeThumbnailProvider\StarImageViewer.NativeThumbnailProvider.vcxproj", "{4DA4746D-2333-4B93-B833-8A0F1EECA31E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -22,9 +24,13 @@ Global
 		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Debug|x64.Build.0 = Debug|x64
 		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Release|x64.ActiveCfg = Release|x64
 		{6F5B8A67-98E7-421A-BAC4-E96981A1B883}.Release|x64.Build.0 = Release|x64
-		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Debug|x64.ActiveCfg = Debug|x64
-		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Debug|x64.Build.0 = Debug|x64
-		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Release|x64.ActiveCfg = Release|x64
-		{7E92F8F5-C660-4971-B34B-470CBB24248B}.Release|x64.Build.0 = Release|x64
+		{E5F6BDEA-B86A-4D23-AC2D-320D60966911}.Debug|x64.ActiveCfg = Debug|x64
+		{E5F6BDEA-B86A-4D23-AC2D-320D60966911}.Debug|x64.Build.0 = Debug|x64
+		{E5F6BDEA-B86A-4D23-AC2D-320D60966911}.Release|x64.ActiveCfg = Release|x64
+		{E5F6BDEA-B86A-4D23-AC2D-320D60966911}.Release|x64.Build.0 = Release|x64
+		{4DA4746D-2333-4B93-B833-8A0F1EECA31E}.Debug|x64.ActiveCfg = Debug|x64
+		{4DA4746D-2333-4B93-B833-8A0F1EECA31E}.Debug|x64.Build.0 = Debug|x64
+		{4DA4746D-2333-4B93-B833-8A0F1EECA31E}.Release|x64.ActiveCfg = Release|x64
+		{4DA4746D-2333-4B93-B833-8A0F1EECA31E}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

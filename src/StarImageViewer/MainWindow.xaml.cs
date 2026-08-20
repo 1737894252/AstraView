@@ -25,6 +25,13 @@ public partial class MainWindow : Window
     private static readonly SemaphoreSlim StandardThumbnailGate =
         new(StandardThumbnailConcurrency, StandardThumbnailConcurrency);
     private static readonly SemaphoreSlim HeavyThumbnailGate = new(1, 1);
+    private sealed class DecodedBitmap
+    {
+        public required BitmapSource Bitmap { get; init; }
+        public int OriginalWidth { get; init; }
+        public int OriginalHeight { get; init; }
+        public bool IsPreview => Bitmap.PixelWidth < OriginalWidth || Bitmap.PixelHeight < OriginalHeight;
+    }
     private string? currentPath;
     private List<string> siblings = new();
     private double zoom = 1;
@@ -33,6 +40,11 @@ public partial class MainWindow : Window
     private bool dragging;
     private CancellationTokenSource? thumbnailCancellation;
     private CancellationTokenSource? folderRefreshCancellation;
+    private CancellationTokenSource? imageLoadCancellation;
+    private Task? highResolutionLoadTask;
+    private bool userAdjustedView;
+    private int originalPixelWidth;
+    private int originalPixelHeight;
     private FileSystemWatcher? folderWatcher;
     private string? watchedFolder;
     private string? navigationRootFolder;
@@ -63,6 +75,7 @@ public partial class MainWindow : Window
         {
             thumbnailCancellation?.Cancel();
             folderRefreshCancellation?.Cancel();
+            imageLoadCancellation?.Cancel();
             folderWatcher?.Dispose();
         };
     }
@@ -81,10 +94,17 @@ public partial class MainWindow : Window
 
     private async Task LoadImageAsync(string path)
     {
+        imageLoadCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        imageLoadCancellation = cancellation;
+        var token = cancellation.Token;
         try
         {
             StatusText.Text = "正在加载…";
-            var bitmap = await Task.Run(() => DecodeBitmap(path));
+            var previewLimit = GetPreviewDecodeDimension();
+            var decoded = await Task.Run(() => DecodeBitmap(path, previewLimit), token);
+            token.ThrowIfCancellationRequested();
+            var bitmap = decoded.Bitmap;
             Picture.Source = bitmap;
             // Give the Image its full pixel-sized layout box. If it is stretched to the viewport,
             // WPF clips oversized sources before the render transform and "fit" shows only the centre.
@@ -93,16 +113,21 @@ public partial class MainWindow : Window
             CenterPicture();
             RotateTransform.Angle = 0;
             PanTransform.X = PanTransform.Y = 0;
+            userAdjustedView = false;
+            originalPixelWidth = decoded.OriginalWidth;
+            originalPixelHeight = decoded.OriginalHeight;
             currentPath = Path.GetFullPath(path);
             TitleText.Text = Path.GetFileName(path);
             Title = $"{Path.GetFileName(path)} — AstraView";
-            StatusText.Text = $"{bitmap.PixelWidth} × {bitmap.PixelHeight}   {FormatBytes(new FileInfo(path).Length)}";
             EmptyHint.Visibility = Visibility.Collapsed;
             RefreshSiblings();
-            var position = siblings.FindIndex(x => string.Equals(x, currentPath, StringComparison.OrdinalIgnoreCase));
-            if (position >= 0) StatusText.Text += $"   {position + 1} / {siblings.Count}";
+            StatusText.Text = BuildImageStatus(path, decoded.IsPreview);
             FitToWindow();
+            highResolutionLoadTask = decoded.IsPreview && SupportsProgressiveUpgrade(path)
+                ? UpgradeToHighResolutionAsync(currentPath, token)
+                : Task.CompletedTask;
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             StatusText.Text = "无法解码";
@@ -110,10 +135,59 @@ public partial class MainWindow : Window
         }
     }
 
-    private static BitmapSource DecodeBitmap(string path)
+    private int GetPreviewDecodeDimension()
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var viewportPixels = Math.Max(Viewport.ActualWidth * dpi.DpiScaleX,
+            Viewport.ActualHeight * dpi.DpiScaleY);
+        return (int)Math.Max(1200, Math.Min(2048, Math.Ceiling(viewportPixels * 1.5)));
+    }
+
+    private async Task UpgradeToHighResolutionAsync(string path, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(450, token);
+            var decoded = await Task.Run(() => DecodeBitmap(path, 8192), token);
+            token.ThrowIfCancellationRequested();
+            if (!string.Equals(currentPath, path, StringComparison.OrdinalIgnoreCase)) return;
+
+            var previousDisplayedWidth = Picture.Width * zoom;
+            Picture.Source = decoded.Bitmap;
+            Picture.Width = decoded.Bitmap.PixelWidth;
+            Picture.Height = decoded.Bitmap.PixelHeight;
+            originalPixelWidth = decoded.OriginalWidth;
+            originalPixelHeight = decoded.OriginalHeight;
+            if (userAdjustedView && Picture.Width > 0)
+            {
+                zoom = previousDisplayedWidth / Picture.Width;
+                ApplyZoom();
+                CenterPicture();
+            }
+            else FitToWindow();
+            StatusText.Text = BuildImageStatus(path, decoded.IsPreview);
+        }
+        catch (OperationCanceledException) { }
+        catch
+        {
+            // The quick preview remains usable if the optional high-resolution pass fails.
+        }
+    }
+
+    private string BuildImageStatus(string path, bool preview)
+    {
+        var status = $"{originalPixelWidth} × {originalPixelHeight}   {FormatBytes(new FileInfo(path).Length)}";
+        var position = siblings.FindIndex(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+        if (position >= 0) status += $"   {position + 1} / {siblings.Count}";
+        if (preview) status += "   快速预览";
+        return status;
+    }
+
+    private static DecodedBitmap DecodeBitmap(string path, int maxDimension)
     {
         // WIC handles these formats natively and avoids Magick decode -> PNG encode -> WPF decode.
         var extension = Path.GetExtension(path);
+        if (extension.Equals(".pdf", StringComparison.OrdinalIgnoreCase)) maxDimension = 4096;
         if (extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
@@ -124,16 +198,31 @@ public partial class MainWindow : Window
             extension.Equals(".ico", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
             extension.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
-            return DecodeWithWindowsImaging(path);
+            return DecodeWithWindowsImaging(path, maxDimension);
 
-        var decoded = ImageDecoder.DecodeForDisplayWithSize(path);
+        var decoded = ImageDecoder.DecodeForDisplayWithSize(path, checked((uint)maxDimension));
         var converted = BitmapSource.Create(checked((int)decoded.Width), checked((int)decoded.Height),
             96, 96, PixelFormats.Bgra32, null, decoded.Pixels, checked((int)decoded.Width * 4));
         converted.Freeze();
-        return converted;
+        return new DecodedBitmap
+        {
+            Bitmap = converted,
+            OriginalWidth = checked((int)decoded.OriginalWidth),
+            OriginalHeight = checked((int)decoded.OriginalHeight)
+        };
     }
 
-    private static BitmapSource DecodeWithWindowsImaging(string path)
+    private static bool SupportsProgressiveUpgrade(string path)
+    {
+        switch (Path.GetExtension(path).ToLowerInvariant())
+        {
+            case ".png": case ".jpg": case ".jpeg": case ".jpe": case ".jfif":
+            case ".bmp": case ".gif": case ".ico": case ".tif": case ".tiff": return true;
+            default: return false;
+        }
+    }
+
+    private static DecodedBitmap DecodeWithWindowsImaging(string path, int maxDimension)
     {
         int pixelWidth;
         int pixelHeight;
@@ -151,7 +240,6 @@ public partial class MainWindow : Window
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
         bitmap.StreamSource = stream;
-        const int maxDimension = 8192;
         if (pixelWidth > maxDimension || pixelHeight > maxDimension)
         {
             if (pixelWidth >= pixelHeight) bitmap.DecodePixelWidth = maxDimension;
@@ -159,7 +247,7 @@ public partial class MainWindow : Window
         }
         bitmap.EndInit();
         bitmap.Freeze();
-        return bitmap;
+        return new DecodedBitmap { Bitmap = bitmap, OriginalWidth = pixelWidth, OriginalHeight = pixelHeight };
     }
 
     private void RefreshSiblings()
@@ -296,8 +384,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (Picture.Source is BitmapSource bitmap && currentPath != null && File.Exists(currentPath))
-            StatusText.Text = $"{bitmap.PixelWidth} × {bitmap.PixelHeight}   {FormatBytes(new FileInfo(currentPath).Length)}   {position + 1} / {images.Count}";
+        if (Picture.Source is BitmapSource && currentPath != null && File.Exists(currentPath))
+            StatusText.Text = BuildImageStatus(currentPath, false);
     }
 
     private static List<string> EnumerateBrowsableDirectories(string folder)
@@ -367,6 +455,7 @@ public partial class MainWindow : Window
 
     private void ClearPictureForFolder()
     {
+        imageLoadCancellation?.Cancel();
         currentPath = null;
         Picture.Source = null;
         EmptyHint.Visibility = Visibility.Visible;
@@ -549,10 +638,12 @@ public partial class MainWindow : Window
         {
             Description = "选择包含图片的文件夹",
             ShowNewFolderButton = false,
-            SelectedPath = currentPath == null ? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures) : Path.GetDirectoryName(currentPath)
+            SelectedPath = currentPath == null
+                ? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)
+                : Path.GetDirectoryName(currentPath) ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)
         };
         if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            await LoadDirectoryAsync(dialog.SelectedPath);
+            await LoadDirectoryAsync(dialog.SelectedPath ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures));
     }
 
     private void RecentFolders_Click(object sender, RoutedEventArgs e)
@@ -687,8 +778,17 @@ public partial class MainWindow : Window
     }
     private async void Previous_Click(object sender, RoutedEventArgs e) => await NavigateAsync(-1);
     private async void Next_Click(object sender, RoutedEventArgs e) => await NavigateAsync(1);
-    private void Fit_Click(object sender, RoutedEventArgs e) => FitToWindow();
-    private void Actual_Click(object sender, RoutedEventArgs e) { zoom = 1; ApplyZoom(); PanTransform.X = PanTransform.Y = 0; }
+    private void Fit_Click(object sender, RoutedEventArgs e) { userAdjustedView = false; FitToWindow(); }
+    private async void Actual_Click(object sender, RoutedEventArgs e)
+    {
+        var pendingHighResolution = highResolutionLoadTask;
+        if (pendingHighResolution != null) await pendingHighResolution;
+        userAdjustedView = true;
+        zoom = 1;
+        ApplyZoom();
+        PanTransform.X = PanTransform.Y = 0;
+        CenterPicture();
+    }
     private void Rotate_Click(object sender, RoutedEventArgs e) => RotateTransform.Angle = (RotateTransform.Angle + 90) % 360;
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
     private void Maximize_Click(object sender, RoutedEventArgs e) =>
@@ -703,6 +803,7 @@ public partial class MainWindow : Window
     private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (Picture.Source == null) return;
+        userAdjustedView = true;
         zoom *= e.Delta > 0 ? 1.15 : 1 / 1.15;
         ApplyZoom();
         e.Handled = true;
@@ -765,7 +866,7 @@ public partial class MainWindow : Window
         var monitorInfo = new MonitorInfo { Size = Marshal.SizeOf(typeof(MonitorInfo)) };
         if (!GetMonitorInfo(monitor, ref monitorInfo)) return IntPtr.Zero;
 
-        var minMaxInfo = (MinMaxInfo)Marshal.PtrToStructure(lParam, typeof(MinMaxInfo));
+        var minMaxInfo = Marshal.PtrToStructure<MinMaxInfo>(lParam);
         var workArea = monitorInfo.WorkArea;
         var monitorArea = monitorInfo.MonitorArea;
         minMaxInfo.MaxPosition.X = Math.Abs(workArea.Left - monitorArea.Left);

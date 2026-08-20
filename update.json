@@ -1,9 +1,9 @@
 {
-  "version": "1.1.1",
-  "releaseName": "AstraView 1.1.1",
-  "releaseNotes": "修复检查更新触发 GitHub API rate limit exceeded 的问题，改用无 API 配额依赖的静态更新清单。",
-  "downloadUrl": "https://github.com/1737894252/AstraView/releases/download/v1.1.1/AstraView-Setup-1.1.1-x64.exe",
-  "fileName": "AstraView-Setup-1.1.1-x64.exe",
-  "sha256": "CF3F3135FF02B751937B6D4B85588206154A3E4BF478C8C446B37A89CE341A41",
-  "size": 138189987
+  "version": "1.3.2",
+  "releaseName": "AstraView 1.3.2",
+  "releaseNotes": "升级为原生 Windows 缩略图组件：常见图片直接由 WIC 渲染，PSD、PDF 与 RAW 保持隔离解码；安装更新会自动释放 COM Surrogate，且无需单独安装 .NET 或 Visual C++ 运行库。",
+  "downloadUrl": "https://github.com/1737894252/AstraView/releases/download/v1.3.2/AstraView-Setup-1.3.2-x64.exe",
+  "fileName": "AstraView-Setup-1.3.2-x64.exe",
+  "sha256": "129C9B9A44CDA88884CF103FC9BC8B18F803BB46DCC8C914B5D59E2CDCC34DC6",
+  "size": 64675085
 }

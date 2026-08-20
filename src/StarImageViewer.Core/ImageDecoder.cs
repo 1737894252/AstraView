@@ -9,16 +9,20 @@ public static class ImageDecoder
 {
     public sealed class ThumbnailData
     {
-        public ThumbnailData(byte[] pixels, uint width, uint height)
+        public ThumbnailData(byte[] pixels, uint width, uint height, uint originalWidth = 0, uint originalHeight = 0)
         {
             Pixels = pixels;
             Width = width;
             Height = height;
+            OriginalWidth = originalWidth == 0 ? width : originalWidth;
+            OriginalHeight = originalHeight == 0 ? height : originalHeight;
         }
 
         public byte[] Pixels { get; }
         public uint Width { get; }
         public uint Height { get; }
+        public uint OriginalWidth { get; }
+        public uint OriginalHeight { get; }
     }
 
     public static byte[] DecodeForDisplay(string path, int maxDimension = 8192)
@@ -131,10 +135,12 @@ public static class ImageDecoder
 
     private static ThumbnailData ToBgraData(MagickImage image, uint maxDimension)
     {
+        var originalWidth = image.Width;
+        var originalHeight = image.Height;
         Prepare(image, maxDimension, maxDimension);
         var width = image.Width;
         var height = image.Height;
         image.Format = MagickFormat.Bgra;
-        return new ThumbnailData(image.ToByteArray(), width, height);
+        return new ThumbnailData(image.ToByteArray(), width, height, originalWidth, originalHeight);
     }
 }

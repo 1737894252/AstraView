@@ -197,8 +197,12 @@ internal static class UpdateService
         return (T)(serializer.ReadObject(stream) ?? throw new InvalidDataException("更新信息格式无效。"));
     }
 
-    private static bool TryParseVersion(string tag, out Version version) =>
-        Version.TryParse((tag ?? string.Empty).Trim().TrimStart('v', 'V'), out version);
+    private static bool TryParseVersion(string tag, out Version version)
+    {
+        var parsed = Version.TryParse((tag ?? string.Empty).Trim().TrimStart('v', 'V'), out var candidate);
+        version = candidate ?? new Version();
+        return parsed && candidate != null;
+    }
 
     private static string NormalizeDigest(string? digest)
     {

@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.3.2"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-1.1.1-x64
+OutputBaseFilename=AstraView-Setup-1.3.2-x64
 SetupIconFile=..\src\StarImageViewer\astraview.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -23,18 +23,19 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupLogging=yes
-CloseApplications=yes
+CloseApplications=no
 RestartApplications=no
 ChangesAssociations=yes
 DisableProgramGroupPage=yes
 
 [Files]
 Source: "..\artifacts\publish\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "redist\NDP48-x86-x64-AllOS-ENU.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsDotNet48OrLater
 
 [InstallDelete]
 Type: files; Name: "{app}\Magick.Native-Q16-x64.dll"
 Type: files; Name: "{app}\Magick.NET-Q16-x64.dll"
+Type: files; Name: "{app}\StarImageViewer.ThumbnailProvider.dll"
+Type: filesandordirs; Name: "{app}\ShellExtension\StarImageViewer.ThumbnailProvider.*"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -55,11 +56,11 @@ Root: HKLM; Subkey: "SOFTWARE\AstraView\Capabilities"; ValueType: string; ValueN
 Root: HKLM; Subkey: "SOFTWARE\RegisteredApplications"; ValueType: string; ValueName: "AstraView"; ValueData: "SOFTWARE\AstraView\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{win}\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"; Parameters: """{app}\StarImageViewer.ThumbnailProvider.dll"" /codebase /nologo"; StatusMsg: "正在注册资源管理器缩略图组件…"; Flags: runhidden waituntilterminated
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\ShellExtension\AstraView.ThumbnailProvider.dll"""; StatusMsg: "正在注册资源管理器缩略图组件…"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{win}\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe"; Parameters: """{app}\StarImageViewer.ThumbnailProvider.dll"" /unregister /nologo"; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterThumbnailProvider"
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s /u ""{app}\ShellExtension\AstraView.ThumbnailProvider.dll"""; Flags: runhidden waituntilterminated; RunOnceId: "UnregisterThumbnailProvider"
 
 [Code]
 const
@@ -91,15 +92,6 @@ begin
   DelTree(CachePattern, False, True, False);
   Exec(ExpandConstant('{win}\explorer.exe'), '', '',
     SW_SHOWNORMAL, ewNoWait, ResultCode);
-end;
-
-function IsDotNet48OrLater: Boolean;
-var
-  Release: Cardinal;
-begin
-  Result := RegQueryDWordValue(HKLM,
-    'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full',
-    'Release', Release) and (Release >= 528040);
 end;
 
 procedure RegisterFileAssociations;
@@ -177,26 +169,40 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    if not IsDotNet48OrLater then
-    begin
-      WizardForm.StatusLabel.Caption := 'Installing Microsoft .NET Framework 4.8 runtime…';
-      if not Exec(ExpandConstant('{tmp}\NDP48-x86-x64-AllOS-ENU.exe'),
-        '/q /norestart', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-        RaiseException('Unable to start the .NET Framework 4.8 installer.');
-      if (ResultCode <> 0) and (ResultCode <> 1641) and (ResultCode <> 3010) then
-        RaiseException(Format('.NET Framework 4.8 installation failed (exit code %d).', [ResultCode]));
-    end;
     RegisterFileAssociations;
     ConfigureContextMenu(WizardIsTaskSelected('contextmenu'));
     NotifyShellAssociationsChanged;
     if WizardIsTaskSelected('refreshthumbcache') then
       RefreshThumbnailCache;
   end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  LegacyProvider: String;
+  NativeProvider: String;
+begin
+  Result := '';
+  LegacyProvider := ExpandConstant('{app}\ShellExtension\StarImageViewer.ThumbnailProvider.dll');
+  NativeProvider := ExpandConstant('{app}\ShellExtension\AstraView.ThumbnailProvider.dll');
+  { Thumbnail handlers are hosted by dllhost.exe. Release the old DLL before
+    Setup tries to overwrite it; this avoids Inno's unreliable COM Surrogate page. }
+  if FileExists(LegacyProvider) or FileExists(NativeProvider) then
+  begin
+    WizardForm.StatusLabel.Caption := '正在关闭旧版缩略图组件…';
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM dllhost.exe', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(300);
+  end;
+  { Upgrades from 1.2 and earlier used a managed .NET Framework provider. }
+  if FileExists(LegacyProvider) then
+    Exec(ExpandConstant('{win}\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe'),
+      '"' + LegacyProvider + '" /unregister /nologo', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -15,11 +15,12 @@ AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于
 - 文件夹缩略图按 96px 解码，在保证正常辨识的同时减少 CPU、内存和缓存占用
 - 鼠标滚轮缩放、拖拽平移、适应窗口、1:1 和旋转
 - 无边框深色界面，多显示器最大化时避让任务栏
+- 大图先显示约 2048px 快速预览，后台加载高清版本；切换图片会取消过期任务
 - PSD/PSB 合成图显示，使用 Magick.NET Q8 控制大文件内存占用
 - PDF 首页渲染及缩略图，基于 PDFium 和 SkiaSharp
-- Windows Explorer 64 位 `IThumbnailProvider` COM 扩展
+- Windows Explorer 64 位原生 `IThumbnailProvider` COM 扩展，解码与 Explorer 进程隔离
 - 双击打开、文件关联及可选的“使用 AstraView 打开”右键菜单
-- 离线安装包内含 .NET Framework 4.8，支持覆盖更新和标准 Windows 卸载
+- 离线自包含安装包，无需另外安装 .NET 运行时，支持覆盖更新和标准 Windows 卸载
 - 应用内检查、下载并安装新版本，下载完成后自动覆盖更新和重启
 
 ## 支持格式
@@ -30,7 +31,9 @@ AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于
 
 ## 技术栈
 
-- WPF / .NET Framework 4.8
+- 主程序：WPF / .NET 8（win-x64 自包含发布）
+- Explorer 缩略图扩展：原生 C++ x64 COM DLL（独立 `ShellExtension` 目录）
+- 缩略图解码进程：.NET 8 自包含，命名管道通信，空闲后自动退出
 - Magick.NET Q8 x64
 - PDFium / PDFtoImage / SkiaSharp
 - Windows Shell COM `IThumbnailProvider`
@@ -41,7 +44,8 @@ AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于
 环境要求：
 
 - Windows 10/11 x64
-- .NET 8 SDK（用于构建目标为 `net48` 的项目）
+- .NET 8 SDK
+- Visual Studio 2022 C++ Build Tools（Desktop development with C++）
 - Inno Setup 6（仅制作安装包时需要）
 
 发布主程序与缩略图组件：
@@ -52,15 +56,13 @@ AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于
 
 输出目录：`artifacts\publish`
 
-制作包含 .NET Framework 4.8 离线运行时的安装包：
+制作无需额外运行时的离线安装包：
 
 ```powershell
 .\scripts\build-installer.ps1
 ```
 
 输出目录：`artifacts\installer`
-
-> `installer/redist/NDP48-x86-x64-AllOS-ENU.exe` 是本地构建依赖，不纳入 Git 仓库。
 
 ## 快捷键
 
@@ -75,7 +77,7 @@ AstraView 是一款面向 Windows 10/11 x64 的现代图片查看器，专注于
 
 ## Windows Explorer 集成
 
-缩略图提供器运行在 64 位 Explorer 进程中，因此程序和 COM 组件固定构建为 x64。安装与卸载通过 `SHChangeNotify` 通知资源管理器刷新关联，不会强制终止 Explorer。
+Explorer 只加载轻量的原生 x64 COM DLL。PSD、RAW、PDF 等解码在独立的 .NET 8 自包含工作进程中完成，通过命名管道返回 BGRA 缩略图；工作进程异常不会把 Explorer 一起带崩，并会在空闲两分钟后退出。安装与卸载通过 `SHChangeNotify` 通知资源管理器刷新关联，不会强制终止 Explorer。
 
 安装程序不会擅自替换 Windows 默认图片应用。用户可以通过“打开方式”将 AstraView 设为特定格式的默认程序，也可以在安装时选择添加右键菜单。
 
