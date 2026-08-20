@@ -30,17 +30,17 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile><WarningLevel>Level4</WarningLevel><SDLCheck>true</SDLCheck><LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreaded</RuntimeLibrary><FunctionLevelLinking>true</FunctionLevelLinking><IntrinsicFunctions>true</IntrinsicFunctions><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><AdditionalIncludeDirectories>$(ProjectDir)..\..\.nuget\packages\bblanchon.pdfium.win32\152.0.7961\build\native\include\pdfium;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><PreprocessorDefinitions>NDEBUG;UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
-    <Link><SubSystem>Windows</SubSystem><EnableCOMDATFolding>true</EnableCOMDATFolding><OptimizeReferences>true</OptimizeReferences><GenerateMapFile>true</GenerateMapFile><AdditionalLibraryDirectories>$(ProjectDir)..\..\.nuget\packages\bblanchon.pdfium.win32\152.0.7961\build\native\lib\win-x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>d2d1.lib;dwrite.lib;windowscodecs.lib;comdlg32.lib;shell32.lib;ole32.lib;uuid.lib;pdfium.dll.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Windows</SubSystem><EnableCOMDATFolding>true</EnableCOMDATFolding><OptimizeReferences>true</OptimizeReferences><AdditionalLibraryDirectories>$(ProjectDir)..\..\.nuget\packages\bblanchon.pdfium.win32\152.0.7961\build\native\lib\win-x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>d2d1.lib;dwrite.lib;windowscodecs.lib;comdlg32.lib;shell32.lib;ole32.lib;uuid.lib;pdfium.dll.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
-    <MagickRuntime Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\*.dll" />
-    <MagickModules Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\modules\**\*.dll" />
+    <MagickRuntime Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_MagickWand_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_MagickCore_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_bzip2_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_freetype_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_lcms_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_lqr_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_raqm_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_xml_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_zlib_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_glib_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_fribidi_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_harfbuzz_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcomp140.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcruntime140.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcruntime140_1.dll" />
+    <MagickModules Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\modules\coders\IM_MOD_RL_psd_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\modules\coders\IM_MOD_RL_raw_.dll" />
   </ItemGroup>
   <Target Name="CopyPdfium" AfterTargets="Build">
     <Copy SourceFiles="$(ProjectDir)..\..\.nuget\packages\bblanchon.pdfium.win32\152.0.7961\runtimes\win-x64\native\pdfium.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(MagickRuntime)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(MagickModules)" DestinationFiles="@(MagickModules->'$(OutDir)modules\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(MagickModules)" DestinationFolder="$(OutDir)modules\coders" SkipUnchangedFiles="true" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
