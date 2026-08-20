@@ -7,6 +7,7 @@
 #include <shobjidl.h>
 #include <d2d1.h>
 #include <dwrite.h>
+#include <fpdfview.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 
@@ -42,6 +43,12 @@ constexpr float kThumbnailBarHeight = 126.0f;
 constexpr float kThumbnailWidth = 120.0f;
 constexpr float kThumbnailHeight = 88.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
+std::once_flag kPdfiumInitialization;
+
+void EnsurePdfiumInitialized()
+{
+    std::call_once(kPdfiumInitialization, [] { FPDF_InitLibrary(); });
+}
 
 struct ThumbnailTask
 {
@@ -61,7 +68,7 @@ struct ThumbnailPixels
 bool IsSupportedImage(const fs::path& path)
 {
     static const std::vector<std::wstring> extensions = {
-        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif" };
+        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".tif", L".tiff", L".ico", L".webp", L".heic", L".heif", L".pdf" };
     auto extension = path.extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
     return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
@@ -70,6 +77,22 @@ bool IsSupportedImage(const fs::path& path)
 std::wstring FileNameOf(const std::wstring& path)
 {
     return fs::path(path).filename().wstring();
+}
+
+bool IsPdf(const std::wstring& path)
+{
+    auto extension = fs::path(path).extension().wstring();
+    std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+    return extension == L".pdf";
+}
+
+std::string ToUtf8(const std::wstring& value)
+{
+    if (value.empty()) return {};
+    const int length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), length, nullptr, nullptr);
+    return result;
 }
 
 class ViewerWindow final
@@ -147,6 +170,13 @@ public:
 
     void OpenImage(const std::wstring& path)
     {
+        if (IsPdf(path))
+        {
+            if (OpenPdf(path)) return;
+            SetStatus(L"无法渲染 PDF：" + FileNameOf(path));
+            MessageBeep(MB_ICONWARNING);
+            return;
+        }
         ComPtr<IWICBitmapDecoder> decoder;
         HRESULT hr = wic_->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
         ComPtr<IWICBitmapFrameDecode> frame;
@@ -353,6 +383,38 @@ private:
         }
     }
 
+    bool OpenPdf(const std::wstring& path)
+    {
+        EnsurePdfiumInitialized();
+        const std::string utf8Path = ToUtf8(path);
+        FPDF_DOCUMENT document = FPDF_LoadDocument(utf8Path.c_str(), nullptr);
+        if (!document) return false;
+        FPDF_PAGE page = FPDF_LoadPage(document, 0);
+        if (!page) { FPDF_CloseDocument(document); return false; }
+        const float pageWidth = FPDF_GetPageWidthF(page);
+        const float pageHeight = FPDF_GetPageHeightF(page);
+        const float scale = std::min(2.0f, 4096.0f / std::max(pageWidth, pageHeight));
+        const UINT width = std::max(1u, static_cast<UINT>(std::round(pageWidth * scale)));
+        const UINT height = std::max(1u, static_cast<UINT>(std::round(pageHeight * scale)));
+        pdfPixels_.assign(static_cast<size_t>(width) * height * 4, 255);
+        FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(static_cast<int>(width), static_cast<int>(height), FPDFBitmap_BGRA, pdfPixels_.data(), static_cast<int>(width * 4));
+        if (!bitmap) { FPDF_ClosePage(page); FPDF_CloseDocument(document); pdfPixels_.clear(); return false; }
+        FPDF_RenderPageBitmap(bitmap, page, 0, 0, static_cast<int>(width), static_cast<int>(height), 0, FPDF_ANNOT);
+        FPDFBitmap_Destroy(bitmap);
+        FPDF_ClosePage(page);
+        FPDF_CloseDocument(document);
+        ComPtr<IWICBitmap> source;
+        if (FAILED(wic_->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppPBGRA, width * 4, static_cast<UINT>(pdfPixels_.size()), pdfPixels_.data(), &source))) return false;
+        imageSource_ = source;
+        imageWidth_ = width; imageHeight_ = height; imagePath_ = path; imageBitmap_.Reset();
+        FitImage();
+        const std::wstring position = images_.empty() ? L"" : L"  ·  " + std::to_wstring(currentImage_ + 1) + L" / " + std::to_wstring(images_.size());
+        SetStatus(L"PDF  " + std::to_wstring(width) + L" × " + std::to_wstring(height) + position);
+        UpdateTitle();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return true;
+    }
+
     void StartThumbnailWorker()
     {
         thumbnailWorker_ = std::thread([this]
@@ -417,6 +479,27 @@ private:
     static ThumbnailPixels* DecodeThumbnail(IWICImagingFactory* factory, const ThumbnailTask& task)
     {
         if (!factory) return nullptr;
+        if (IsPdf(task.path))
+        {
+            EnsurePdfiumInitialized();
+            const std::string utf8Path = ToUtf8(task.path);
+            FPDF_DOCUMENT document = FPDF_LoadDocument(utf8Path.c_str(), nullptr);
+            if (!document) return nullptr;
+            FPDF_PAGE page = FPDF_LoadPage(document, 0);
+            if (!page) { FPDF_CloseDocument(document); return nullptr; }
+            const float widthInPoints = FPDF_GetPageWidthF(page);
+            const float heightInPoints = FPDF_GetPageHeightF(page);
+            const float scale = std::min(kThumbnailWidth / widthInPoints, kThumbnailHeight / heightInPoints);
+            const UINT width = std::max(1u, static_cast<UINT>(widthInPoints * scale));
+            const UINT height = std::max(1u, static_cast<UINT>(heightInPoints * scale));
+            auto result = std::make_unique<ThumbnailPixels>();
+            result->generation = task.generation; result->index = task.index; result->width = width; result->height = height;
+            result->pixels.assign(static_cast<size_t>(width) * height * 4, 255);
+            FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(static_cast<int>(width), static_cast<int>(height), FPDFBitmap_BGRA, result->pixels.data(), static_cast<int>(width * 4));
+            if (bitmap) { FPDF_RenderPageBitmap(bitmap, page, 0, 0, static_cast<int>(width), static_cast<int>(height), 0, FPDF_ANNOT); FPDFBitmap_Destroy(bitmap); }
+            FPDF_ClosePage(page); FPDF_CloseDocument(document);
+            return bitmap ? result.release() : nullptr;
+        }
         ComPtr<IWICBitmapDecoder> decoder;
         ComPtr<IWICBitmapFrameDecode> frame;
         if (FAILED(factory->CreateDecoderFromFilename(task.path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) || FAILED(decoder->GetFrame(0, &frame))) return nullptr;
@@ -546,6 +629,7 @@ private:
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, folderPath_, status_;
+    std::vector<BYTE> pdfPixels_;
     std::vector<std::wstring> images_;
     std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
     std::thread thumbnailWorker_;
