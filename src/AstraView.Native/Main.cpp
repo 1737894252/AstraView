@@ -11,10 +11,16 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cwctype>
+#include <deque>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -35,6 +41,22 @@ constexpr float kToolbarHeight = 58.0f;
 constexpr float kThumbnailBarHeight = 126.0f;
 constexpr float kThumbnailWidth = 120.0f;
 constexpr float kThumbnailHeight = 88.0f;
+constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
+
+struct ThumbnailTask
+{
+    unsigned generation{};
+    size_t index{};
+    std::wstring path;
+};
+
+struct ThumbnailPixels
+{
+    unsigned generation{};
+    size_t index{};
+    UINT width{}, height{};
+    std::vector<BYTE> pixels;
+};
 
 bool IsSupportedImage(const fs::path& path)
 {
@@ -53,6 +75,8 @@ std::wstring FileNameOf(const std::wstring& path)
 class ViewerWindow final
 {
 public:
+    ~ViewerWindow() { StopThumbnailWorker(); }
+
     int Run(HINSTANCE instance, int showCommand, const std::wstring& initialPath)
     {
         instance_ = instance;
@@ -77,6 +101,7 @@ public:
         if (!hwnd_)
             return 1;
         DragAcceptFiles(hwnd_, TRUE);
+        StartThumbnailWorker();
         ShowWindow(hwnd_, showCommand);
         UpdateWindow(hwnd_);
         if (!initialPath.empty())
@@ -88,6 +113,8 @@ public:
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        StopThumbnailWorker();
+        DrainPendingThumbnails();
         return static_cast<int>(message.wParam);
     }
 
@@ -106,12 +133,14 @@ public:
             }
             std::sort(images_.begin(), images_.end());
             thumbnails_.clear();
+            QueueThumbnails();
             if (!images_.empty()) { currentImage_ = 0; OpenImage(images_.front()); return; }
             SetStatus(L"此文件夹没有可由 WIC 直接解码的图片");
             return;
         }
         images_.clear();
         thumbnails_.clear();
+        CancelThumbnailTasks();
         currentImage_ = 0;
         OpenImage(path);
     }
@@ -179,6 +208,7 @@ private:
         case WM_LBUTTONDBLCLK: FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); return 0;
         case WM_DROPFILES: HandleDrop(reinterpret_cast<HDROP>(wParam)); return 0;
         case WM_KEYDOWN: HandleKey(wParam); return 0;
+        case kThumbnailReadyMessage: AdoptThumbnail(reinterpret_cast<ThumbnailPixels*>(lParam)); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: return DefWindowProcW(hwnd_, message, wParam, lParam);
         }
@@ -323,6 +353,102 @@ private:
         }
     }
 
+    void StartThumbnailWorker()
+    {
+        thumbnailWorker_ = std::thread([this]
+        {
+            CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            ComPtr<IWICImagingFactory> workerWic;
+            CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&workerWic));
+            for (;;)
+            {
+                ThumbnailTask task;
+                {
+                    std::unique_lock lock(thumbnailMutex_);
+                    thumbnailSignal_.wait(lock, [this] { return thumbnailStopping_ || !thumbnailTasks_.empty(); });
+                    if (thumbnailStopping_) break;
+                    task = std::move(thumbnailTasks_.front());
+                    thumbnailTasks_.pop_front();
+                }
+                auto* pixels = DecodeThumbnail(workerWic.Get(), task);
+                if (!pixels) continue;
+                if (thumbnailStopping_ || pixels->generation != thumbnailGeneration_.load() || !PostMessageW(hwnd_, kThumbnailReadyMessage, 0, reinterpret_cast<LPARAM>(pixels)))
+                    delete pixels;
+            }
+            CoUninitialize();
+        });
+    }
+
+    void StopThumbnailWorker()
+    {
+        {
+            std::lock_guard lock(thumbnailMutex_);
+            thumbnailStopping_ = true;
+            thumbnailTasks_.clear();
+        }
+        thumbnailSignal_.notify_all();
+        if (thumbnailWorker_.joinable()) thumbnailWorker_.join();
+    }
+
+    void QueueThumbnails()
+    {
+        const unsigned generation = ++thumbnailGeneration_;
+        std::lock_guard lock(thumbnailMutex_);
+        thumbnailTasks_.clear();
+        for (size_t index = 0; index < images_.size(); ++index)
+            thumbnailTasks_.push_back({ generation, index, images_[index] });
+        thumbnailSignal_.notify_one();
+    }
+
+    void CancelThumbnailTasks()
+    {
+        ++thumbnailGeneration_;
+        std::lock_guard lock(thumbnailMutex_);
+        thumbnailTasks_.clear();
+    }
+
+    void DrainPendingThumbnails()
+    {
+        MSG message{};
+        while (PeekMessageW(&message, hwnd_, kThumbnailReadyMessage, kThumbnailReadyMessage, PM_REMOVE))
+            delete reinterpret_cast<ThumbnailPixels*>(message.lParam);
+    }
+
+    static ThumbnailPixels* DecodeThumbnail(IWICImagingFactory* factory, const ThumbnailTask& task)
+    {
+        if (!factory) return nullptr;
+        ComPtr<IWICBitmapDecoder> decoder;
+        ComPtr<IWICBitmapFrameDecode> frame;
+        if (FAILED(factory->CreateDecoderFromFilename(task.path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) || FAILED(decoder->GetFrame(0, &frame))) return nullptr;
+        UINT width = 0, height = 0; frame->GetSize(&width, &height);
+        if (!width || !height) return nullptr;
+        const float ratio = std::min(kThumbnailWidth / width, kThumbnailHeight / height);
+        const UINT scaledWidth = std::max(1u, static_cast<UINT>(width * ratio));
+        const UINT scaledHeight = std::max(1u, static_cast<UINT>(height * ratio));
+        ComPtr<IWICBitmapScaler> scaler;
+        ComPtr<IWICFormatConverter> converter;
+        if (FAILED(factory->CreateBitmapScaler(&scaler)) || FAILED(scaler->Initialize(frame.Get(), scaledWidth, scaledHeight, WICBitmapInterpolationModeFant)) ||
+            FAILED(factory->CreateFormatConverter(&converter)) || FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return nullptr;
+        auto result = std::make_unique<ThumbnailPixels>();
+        result->generation = task.generation; result->index = task.index; result->width = scaledWidth; result->height = scaledHeight;
+        result->pixels.resize(static_cast<size_t>(scaledWidth) * scaledHeight * 4);
+        if (FAILED(converter->CopyPixels(nullptr, scaledWidth * 4, static_cast<UINT>(result->pixels.size()), result->pixels.data()))) return nullptr;
+        return result.release();
+    }
+
+    void AdoptThumbnail(ThumbnailPixels* pixels)
+    {
+        std::unique_ptr<ThumbnailPixels> owned(pixels);
+        if (!pixels || pixels->generation != thumbnailGeneration_.load() || !target_) return;
+        ComPtr<IWICBitmap> bitmap;
+        if (SUCCEEDED(wic_->CreateBitmapFromMemory(pixels->width, pixels->height, GUID_WICPixelFormat32bppPBGRA, pixels->width * 4, static_cast<UINT>(pixels->pixels.size()), pixels->pixels.data(), &bitmap)))
+        {
+            ComPtr<ID2D1Bitmap> d2dBitmap;
+            if (SUCCEEDED(target_->CreateBitmapFromWicBitmap(bitmap.Get(), nullptr, &d2dBitmap))) thumbnails_[pixels->index] = d2dBitmap;
+        }
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
     bool CreateDeviceResources()
     {
         if (target_) return true;
@@ -350,23 +476,6 @@ private:
         return std::min(currentImage_ - 4, images_.size() - 8);
     }
 
-    ComPtr<ID2D1Bitmap> CreateThumbnail(size_t index)
-    {
-        ComPtr<IWICBitmapDecoder> decoder;
-        ComPtr<IWICBitmapFrameDecode> frame;
-        if (FAILED(wic_->CreateDecoderFromFilename(images_[index].c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder)) ||
-            FAILED(decoder->GetFrame(0, &frame))) return nullptr;
-        UINT width = 0, height = 0; frame->GetSize(&width, &height);
-        const float ratio = std::min(kThumbnailWidth / width, kThumbnailHeight / height);
-        ComPtr<IWICBitmapScaler> scaler;
-        if (FAILED(wic_->CreateBitmapScaler(&scaler)) || FAILED(scaler->Initialize(frame.Get(), std::max(1u, static_cast<UINT>(width * ratio)), std::max(1u, static_cast<UINT>(height * ratio)), WICBitmapInterpolationModeFant))) return nullptr;
-        ComPtr<IWICFormatConverter> converter;
-        if (FAILED(wic_->CreateFormatConverter(&converter)) || FAILED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) return nullptr;
-        ComPtr<ID2D1Bitmap> bitmap;
-        target_->CreateBitmapFromWicBitmap(converter.Get(), nullptr, &bitmap);
-        return bitmap;
-    }
-
     void DrawThumbnails(const D2D1_SIZE_F& size)
     {
         if (images_.empty()) return;
@@ -376,12 +485,11 @@ private:
         const size_t last = std::min(images_.size(), first + 8);
         for (size_t index = first; index < last; ++index)
         {
-            auto& bitmap = thumbnails_[index];
-            if (!bitmap) bitmap = CreateThumbnail(index);
+            const auto found = thumbnails_.find(index);
             const float left = 18.0f + static_cast<float>(index - first) * kThumbnailWidth;
             const auto frame = D2D1::RectF(left, top + 18.0f, left + kThumbnailWidth - 10.0f, top + 18.0f + kThumbnailHeight);
             if (index == currentImage_) target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left - 3, top + 15, left + kThumbnailWidth - 7, top + 109), 5, 5), accentBrush_.Get(), 2.0f);
-            if (bitmap) target_->DrawBitmap(bitmap.Get(), frame, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            if (found != thumbnails_.end()) target_->DrawBitmap(found->second.Get(), frame, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
     }
 
@@ -440,6 +548,12 @@ private:
     std::wstring imagePath_, folderPath_, status_;
     std::vector<std::wstring> images_;
     std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
+    std::thread thumbnailWorker_;
+    std::mutex thumbnailMutex_;
+    std::condition_variable thumbnailSignal_;
+    std::deque<ThumbnailTask> thumbnailTasks_;
+    std::atomic_uint thumbnailGeneration_{};
+    std::atomic_bool thumbnailStopping_{};
     size_t currentImage_{};
     UINT imageWidth_{}, imageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
