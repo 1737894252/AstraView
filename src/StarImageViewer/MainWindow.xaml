@@ -131,6 +131,7 @@
             <Border Grid.Row="1" x:Name="Viewport" ClipToBounds="True"
                     MouseWheel="Viewport_MouseWheel" MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
                     MouseLeftButtonUp="Viewport_MouseLeftButtonUp" MouseMove="Viewport_MouseMove"
+                    MouseLeave="Viewport_MouseLeave"
                     ContextMenuOpening="ImageContextMenu_Opening">
                 <Border.ContextMenu>
                     <ContextMenu x:Name="ImageContextMenu" Background="#242932" BorderBrush="#3B424E" BorderThickness="1"
@@ -199,6 +200,23 @@
                         <TextBlock Text="拖放图片到此处，或使用顶部的打开按钮" FontSize="12"
                                    Foreground="{StaticResource MutedTextBrush}" TextAlignment="Center" Margin="0,7,0,0" />
                     </StackPanel>
+                    <Border x:Name="FloatingViewerCommands" Visibility="Collapsed" HorizontalAlignment="Center"
+                            VerticalAlignment="Bottom" Margin="0,0,0,14" Padding="6,5" Opacity="0.78"
+                            Background="#B51F252D" BorderBrush="#596170" BorderThickness="1" CornerRadius="10"
+                            MouseEnter="FloatingViewerCommands_MouseEnter" MouseLeave="FloatingViewerCommands_MouseLeave">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource ToolbarButton}" Content="&#xE76B;" FontFamily="Segoe MDL2 Assets"
+                                    FontSize="15" Padding="8,4" Click="Previous_Click" ToolTip="上一张 (←)" />
+                            <Button Style="{StaticResource ToolbarButton}" Content="&#xE76C;" FontFamily="Segoe MDL2 Assets"
+                                    FontSize="15" Padding="8,4" Click="Next_Click" ToolTip="下一张 (→)" />
+                            <Button Style="{StaticResource ToolbarButton}" Content="&#xE7AD;" FontFamily="Segoe MDL2 Assets"
+                                    FontSize="15" Padding="8,4" Click="Rotate_Click" ToolTip="顺时针旋转" />
+                            <Button Style="{StaticResource ToolbarButton}" Content="适应" FontSize="10" FontWeight="SemiBold"
+                                    Padding="8,4" Click="Fit_Click" ToolTip="适应窗口" />
+                            <Button Style="{StaticResource ToolbarButton}" Content="1:1" FontSize="10" FontWeight="SemiBold"
+                                    Padding="8,4" Click="Actual_Click" ToolTip="实际大小" />
+                        </StackPanel>
+                    </Border>
                 </Grid>
             </Border>
 
@@ -278,18 +296,6 @@
                 <Grid Margin="14,0">
                     <TextBlock x:Name="StatusText" VerticalAlignment="Center" HorizontalAlignment="Left" Panel.ZIndex="1"
                                Foreground="#AAB0BD" FontSize="11" Text="准备就绪" />
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <Button Style="{StaticResource ToolbarButton}" Content="&#xE76B;" FontFamily="Segoe MDL2 Assets"
-                                FontSize="15" Padding="8,4" Click="Previous_Click" ToolTip="上一张 (←)" />
-                        <Button Style="{StaticResource ToolbarButton}" Content="&#xE76C;" FontFamily="Segoe MDL2 Assets"
-                                FontSize="15" Padding="8,4" Click="Next_Click" ToolTip="下一张 (→)" />
-                        <Button Style="{StaticResource ToolbarButton}" Content="&#xE7AD;" FontFamily="Segoe MDL2 Assets"
-                                FontSize="15" Padding="8,4" Click="Rotate_Click" ToolTip="顺时针旋转" />
-                        <Button Style="{StaticResource ToolbarButton}" Content="适应" FontSize="10" FontWeight="SemiBold"
-                                Padding="8,4" Click="Fit_Click" ToolTip="适应窗口" />
-                        <Button Style="{StaticResource ToolbarButton}" Content="1:1" FontSize="10" FontWeight="SemiBold"
-                                Padding="8,4" Click="Actual_Click" ToolTip="实际大小" />
-                    </StackPanel>
                     <Border Background="#303640" CornerRadius="7" Padding="11,5" HorizontalAlignment="Right" VerticalAlignment="Center" Panel.ZIndex="1">
                         <TextBlock x:Name="ZoomText" Text="—" Foreground="#D5D1FF" FontSize="11"
                                    FontWeight="SemiBold" MinWidth="42" TextAlignment="Center" />

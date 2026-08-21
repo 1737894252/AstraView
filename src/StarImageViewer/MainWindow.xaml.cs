@@ -819,11 +819,25 @@ public partial class MainWindow : Window
     }
     private void Viewport_MouseMove(object sender, MouseEventArgs e)
     {
+        var p = e.GetPosition(Viewport);
+        var inCommandZone = p.Y >= Math.Max(0, Viewport.ActualHeight - 96);
+        SetFloatingCommandsVisible(inCommandZone || FloatingViewerCommands.IsMouseOver);
         if (!dragging) return;
-        var p = e.GetPosition(Viewport); PanTransform.X = panStart.X + p.X - dragStart.X; PanTransform.Y = panStart.Y + p.Y - dragStart.Y;
+        PanTransform.X = panStart.X + p.X - dragStart.X; PanTransform.Y = panStart.Y + p.Y - dragStart.Y;
     }
     private void Viewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     { dragging = false; Viewport.ReleaseMouseCapture(); Mouse.OverrideCursor = null; }
+    private void Viewport_MouseLeave(object sender, MouseEventArgs e) => SetFloatingCommandsVisible(false);
+    private void FloatingViewerCommands_MouseEnter(object sender, MouseEventArgs e) => SetFloatingCommandsVisible(true);
+    private void FloatingViewerCommands_MouseLeave(object sender, MouseEventArgs e) => SetFloatingCommandsVisible(false);
+
+    private void SetFloatingCommandsVisible(bool visible)
+    {
+        if (Picture.Source == null) visible = false;
+        var targetVisibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (FloatingViewerCommands.Visibility != targetVisibility)
+            FloatingViewerCommands.Visibility = targetVisibility;
+    }
 
     private async void Window_Drop(object sender, DragEventArgs e)
     {
