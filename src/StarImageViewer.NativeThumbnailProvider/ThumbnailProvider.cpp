@@ -28,6 +28,8 @@ struct MagickApi {
     MagickWandHandle* (*create)(){};
     MagickWandHandle* (*destroy)(MagickWandHandle*){};
     MagickBoolean (*readFile)(MagickWandHandle*, const char*){};
+    size_t (*getNumberImages)(MagickWandHandle*){};
+    MagickWandHandle* (*mergeImageLayers)(MagickWandHandle*, int){};
     size_t (*getWidth)(MagickWandHandle*){};
     size_t (*getHeight)(MagickWandHandle*){};
     MagickBoolean (*resize)(MagickWandHandle*, size_t, size_t, int, double){};
@@ -83,12 +85,25 @@ bool MagickApi::Load() {
     create = reinterpret_cast<MagickWandHandle* (*)()>(GetProcAddress(module, "NewMagickWand"));
     destroy = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*)>(GetProcAddress(module, "DestroyMagickWand"));
     readFile = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, const char*)>(GetProcAddress(module, "MagickReadImage"));
+    getNumberImages = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetNumberImages"));
+    mergeImageLayers = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*, int)>(GetProcAddress(module, "MagickMergeImageLayers"));
     getWidth = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageWidth"));
     getHeight = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageHeight"));
     resize = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, size_t, size_t, int, double)>(GetProcAddress(module, "MagickResizeImage"));
     exportPixels = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*)>(GetProcAddress(module, "MagickExportImagePixels"));
-    if (!genesis || !create || !destroy || !readFile || !getWidth || !getHeight || !resize || !exportPixels) return false;
+    if (!genesis || !create || !destroy || !readFile || !getNumberImages || !mergeImageLayers || !getWidth || !getHeight || !resize || !exportPixels) return false;
     genesis();
+    return true;
+}
+
+constexpr int kFlattenLayerMethod = 14;
+
+bool FlattenMagickLayers(MagickWandHandle*& wand) {
+    if (!wand || g_magick.getNumberImages(wand) <= 1) return true;
+    MagickWandHandle* flattened = g_magick.mergeImageLayers(wand, kFlattenLayerMethod);
+    if (!flattened) return false;
+    g_magick.destroy(wand);
+    wand = flattened;
     return true;
 }
 
@@ -111,6 +126,7 @@ HRESULT DecodeWithMagick(const std::wstring& path, UINT requestedSize, HBITMAP* 
     if (!wand) return E_OUTOFMEMORY;
     const std::string utf8 = ToUtf8(path);
     if (!g_magick.readFile(wand, utf8.c_str())) { g_magick.destroy(wand); return E_FAIL; }
+    if (!FlattenMagickLayers(wand)) { g_magick.destroy(wand); return E_FAIL; }
     const size_t originalWidth = g_magick.getWidth(wand), originalHeight = g_magick.getHeight(wand);
     if (!originalWidth || !originalHeight) { g_magick.destroy(wand); return E_FAIL; }
     const double scale = std::min(1.0, static_cast<double>(requestedSize) / std::max(originalWidth, originalHeight));
