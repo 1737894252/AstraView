@@ -49,6 +49,7 @@ constexpr float kThumbnailWidth = 120.0f;
 constexpr float kThumbnailHeight = 88.0f;
 constexpr float kStatusBarHeight = 44.0f;
 constexpr float kResizeBorder = 6.0f;
+constexpr float kWindowControlWidth = 46.0f;
 constexpr UINT kThumbnailReadyMessage = WM_APP + 19;
 constexpr UINT kDirectoryChangedMessage = WM_APP + 20;
 constexpr UINT kImageReadyMessage = WM_APP + 21;
@@ -424,25 +425,24 @@ private:
         ReleaseCapture();
         if (!wasClick) return;
         RECT client{}; GetClientRect(hwnd_, &client);
-        if (y >= 0 && y < static_cast<int>(kToolbarHeight) && x >= client.right - 144)
+        if (y >= 0 && y < static_cast<int>(kToolbarHeight) && x >= client.right - static_cast<int>(kWindowControlWidth * 3))
         {
-            if (x >= client.right - 48) PostMessageW(hwnd_, WM_CLOSE, 0, 0);
-            else if (x >= client.right - 96) ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+            if (x >= client.right - static_cast<int>(kWindowControlWidth)) PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+            else if (x >= client.right - static_cast<int>(kWindowControlWidth * 2)) ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
             else ShowWindow(hwnd_, SW_MINIMIZE);
             return;
         }
         if (HandleThumbnailClick(x, y)) return;
         if (y < 0 || y > static_cast<int>(kToolbarHeight)) return;
-        if (x >= 58 && x < 112) OpenFileDialog(false);
-        else if (x >= 118 && x < 188) OpenFileDialog(true);
-        else if (x >= 194 && x < 250) OpenRecentMenu();
-        else if (x >= 270 && x < 302) OpenRelativeImage(-1);
-        else if (x >= 308 && x < 340) OpenRelativeImage(1);
-        else if (x >= 360 && x < 406) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 412 && x < 456) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
-        else if (x >= 462 && x < 516) RotateClockwise();
-        else if (x >= 522 && x < 578) ToggleFullscreen();
-        else if (x >= 584 && x < 638) StartUpdateCheck();
+        if (x >= 52 && x < 118) OpenFileDialog(false);
+        else if (x >= 118 && x < 196) OpenFileDialog(true);
+        else if (x >= 196 && x < 264) OpenRecentMenu();
+        else if (x >= 264 && x < 332) StartUpdateCheck();
+        else if (x >= 332 && x < 374) OpenRelativeImage(-1);
+        else if (x >= 374 && x < 416) OpenRelativeImage(1);
+        else if (x >= 416 && x < 458) RotateClockwise();
+        else if (x >= 458 && x < 506) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else if (x >= 506 && x < 550) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
     }
 
     LRESULT HitTest(int screenX, int screenY) const
@@ -464,11 +464,7 @@ private:
         }
         if (point.y >= 0 && point.y < static_cast<int>(kToolbarHeight))
         {
-            if ((point.x >= 58 && point.x < 112) || (point.x >= 118 && point.x < 188) || (point.x >= 194 && point.x < 250) ||
-                (point.x >= 270 && point.x < 302) || (point.x >= 308 && point.x < 340) ||
-                (point.x >= 360 && point.x < 406) || (point.x >= 412 && point.x < 456) ||
-                (point.x >= 462 && point.x < 516) || (point.x >= 522 && point.x < 578) ||
-                (point.x >= 584 && point.x < 638) || point.x >= client.right - 144)
+            if ((point.x >= 52 && point.x < 550) || point.x >= client.right - static_cast<int>(kWindowControlWidth * 3))
                 return HTCLIENT;
             return HTCAPTION;
         }
@@ -1258,14 +1254,25 @@ private:
         if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.10f, 0.14f), &backgroundBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.13f, 0.16f, 0.22f), &toolbarBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.84f, 0.88f, 0.96f), &textBrush_)) ||
+            FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.61f, 0.64f, 0.70f), &mutedTextBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.28f, 0.65f, 1.0f), &accentBrush_))) return false;
         if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"zh-CN", &textFormat_))) return false;
         textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 18.0f, L"zh-CN", &emptyStateFormat_))) return false;
-        emptyStateFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        emptyStateFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        emptyStateFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe MDL2 Assets", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"", &iconFormat_))) return false;
+        iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        iconFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 13.0f, L"zh-CN", &titleFormat_))) return false;
+        titleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        titleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        titleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 19.0f, L"zh-CN", &emptyStateTitleFormat_))) return false;
+        emptyStateTitleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        emptyStateTitleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f, L"zh-CN", &emptyStateSubtitleFormat_))) return false;
+        emptyStateSubtitleFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        emptyStateSubtitleFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        emptyStateSubtitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
         return RecreateImageBitmap();
     }
 
@@ -1322,11 +1329,24 @@ private:
         target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
     }
 
-    void DrawWindowButton(const wchar_t* text, float left, bool close)
+    void DrawIconButton(const wchar_t* icon, float left, float width)
     {
-        const auto rect = D2D1::RectF(left, 0.0f, left + 48.0f, kToolbarHeight);
-        if (close) target_->FillRectangle(rect, accentBrush_.Get());
-        target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
+        const D2D1_RECT_F rect = D2D1::RectF(left, 0.0f, left + width, kToolbarHeight);
+        target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), rect, textBrush_.Get());
+    }
+
+    void DrawCommand(const wchar_t* icon, const wchar_t* text, float left, float width)
+    {
+        const auto iconRect = D2D1::RectF(left + 7.0f, 0.0f, left + 29.0f, kToolbarHeight);
+        target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), iconRect, textBrush_.Get());
+        const auto textRect = D2D1::RectF(left + 31.0f, 0.0f, left + width - 5.0f, kToolbarHeight);
+        target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), textRect, textBrush_.Get());
+    }
+
+    void DrawWindowButton(const wchar_t* icon, float left)
+    {
+        const auto rect = D2D1::RectF(left, 10.0f, left + kWindowControlWidth, 48.0f);
+        target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), rect, textBrush_.Get());
     }
 
     void Paint()
@@ -1337,23 +1357,27 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0.045f, 0.055f, 0.075f));
         target_->FillRectangle(D2D1::RectF(0, 0, size.width, kToolbarHeight), toolbarBrush_.Get());
-        DrawButton(L"打开", 58.0f, 54.0f);
-        DrawButton(L"文件夹", 118.0f, 70.0f);
-        DrawButton(L"最近", 194.0f, 56.0f);
-        DrawButton(L"‹", 270.0f, 32.0f);
-        DrawButton(L"›", 308.0f, 32.0f);
-        DrawButton(L"适应", 360.0f, 46.0f);
-        DrawButton(L"1:1", 412.0f, 44.0f);
-        DrawButton(L"旋转", 462.0f, 54.0f);
-        DrawButton(L"全屏", 522.0f, 56.0f);
-        DrawButton(L"更新", 584.0f, 54.0f);
+        DrawCommand(L"\xE8E5", L"打开", 52.0f, 66.0f);
+        DrawCommand(L"\xE838", L"文件夹", 118.0f, 78.0f);
+        DrawCommand(L"\xE823", L"最近", 196.0f, 68.0f);
+        DrawCommand(L"\xE895", L"更新", 264.0f, 68.0f);
+        DrawIconButton(L"\xE76B", 332.0f, 42.0f);
+        DrawIconButton(L"\xE76C", 374.0f, 42.0f);
+        DrawIconButton(L"\xE7AD", 416.0f, 42.0f);
+        DrawButton(L"适应", 458.0f, 48.0f);
+        DrawButton(L"1:1", 506.0f, 44.0f);
         const std::wstring& displayPath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
         const std::wstring title = displayPath.empty() ? L"AstraView" : FileNameOf(displayPath);
-        target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), textFormat_.Get(), D2D1::RectF(654, 0, std::max(654.0f, size.width - 154.0f), kToolbarHeight), textBrush_.Get());
+        const float center = size.width / 2.0f;
+        const float safeLeft = 564.0f;
+        const float safeRight = size.width - kWindowControlWidth * 3.0f - 14.0f;
+        const float halfAvailable = std::max(0.0f, std::min(center - safeLeft, safeRight - center));
+        if (halfAvailable >= 24.0f)
+            target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(), D2D1::RectF(center - halfAvailable, 0.0f, center + halfAvailable, kToolbarHeight), textBrush_.Get());
         target_->DrawLine(D2D1::Point2F(0, kToolbarHeight - 1.0f), D2D1::Point2F(size.width, kToolbarHeight - 1.0f), backgroundBrush_.Get(), 1.0f);
-        DrawWindowButton(L"—", size.width - 144.0f, false);
-        DrawWindowButton(IsZoomed(hwnd_) ? L"▣" : L"□", size.width - 96.0f, false);
-        DrawWindowButton(L"×", size.width - 48.0f, true);
+        DrawWindowButton(L"\xE921", size.width - kWindowControlWidth * 3.0f);
+        DrawWindowButton(IsZoomed(hwnd_) ? L"\xE923" : L"\xE922", size.width - kWindowControlWidth * 2.0f);
+        DrawWindowButton(L"\xE8BB", size.width - kWindowControlWidth);
 
         if (imageBitmap_)
         {
@@ -1362,24 +1386,30 @@ private:
         }
         else
         {
-            const wchar_t* prompt = L"AstraView Native Preview\n拖入图片，或按 Ctrl+O 打开";
             const float contentTop = kToolbarHeight;
             const float contentBottom = size.height - kStatusBarHeight;
             const float contentCenter = (contentTop + contentBottom) / 2.0f;
-            target_->DrawTextW(prompt, static_cast<UINT32>(wcslen(prompt)), emptyStateFormat_.Get(), D2D1::RectF(0, contentCenter - 38.0f, size.width, contentCenter + 38.0f), textBrush_.Get());
+            const wchar_t* heading = L"打开一张图片";
+            const wchar_t* subtitle = L"拖放图片到此处，或使用顶部的打开按钮";
+            target_->DrawTextW(heading, static_cast<UINT32>(wcslen(heading)), emptyStateTitleFormat_.Get(), D2D1::RectF(0, contentCenter + 18.0f, size.width, contentCenter + 44.0f), textBrush_.Get());
+            target_->DrawTextW(subtitle, static_cast<UINT32>(wcslen(subtitle)), emptyStateSubtitleFormat_.Get(), D2D1::RectF(0, contentCenter + 51.0f, size.width, contentCenter + 70.0f), mutedTextBrush_.Get());
         }
         DrawThumbnails(size);
         const float statusTop = size.height - kStatusBarHeight;
         target_->FillRectangle(D2D1::RectF(0, statusTop, size.width, size.height), toolbarBrush_.Get());
-        const std::wstring footer = status_.empty() ? L"纯 C++ / Win32 + WIC + Direct2D" : status_;
+        const std::wstring footer = status_.empty() ? L"准备就绪" : status_;
         target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, statusTop, std::max(16.0f, size.width - 140.0f), size.height), textBrush_.Get());
         target_->DrawTextW(ZoomStatus().c_str(), static_cast<UINT32>(ZoomStatus().size()), textFormat_.Get(), D2D1::RectF(size.width - 108.0f, statusTop + 6.0f, size.width - 18.0f, size.height - 6.0f), accentBrush_.Get());
         const HRESULT result = target_->EndDraw();
         if (SUCCEEDED(result) && appIcon_)
+        {
             DrawIconEx(ps.hdc, 12, 13, appIcon_, 32, 32, 0, nullptr, DI_NORMAL);
+            if (!imageBitmap_)
+                DrawIconEx(ps.hdc, static_cast<int>(size.width / 2.0f - 36.0f), static_cast<int>((kToolbarHeight + size.height - kStatusBarHeight) / 2.0f - 66.0f), appIcon_, 72, 72, 0, nullptr, DI_NORMAL);
+        }
         if (result == D2DERR_RECREATE_TARGET)
         {
-            imageBitmap_.Reset(); thumbnails_.clear(); emptyStateFormat_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
+            imageBitmap_.Reset(); thumbnails_.clear(); emptyStateSubtitleFormat_.Reset(); emptyStateTitleFormat_.Reset(); titleFormat_.Reset(); iconFormat_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); mutedTextBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
         }
         EndPaint(hwnd_, &ps);
     }
@@ -1391,8 +1421,8 @@ private:
     ComPtr<ID2D1Factory> d2dFactory_;
     ComPtr<IDWriteFactory> dwriteFactory_;
     ComPtr<ID2D1HwndRenderTarget> target_;
-    ComPtr<ID2D1SolidColorBrush> backgroundBrush_, toolbarBrush_, textBrush_, accentBrush_;
-    ComPtr<IDWriteTextFormat> textFormat_, emptyStateFormat_;
+    ComPtr<ID2D1SolidColorBrush> backgroundBrush_, toolbarBrush_, textBrush_, mutedTextBrush_, accentBrush_;
+    ComPtr<IDWriteTextFormat> textFormat_, iconFormat_, titleFormat_, emptyStateTitleFormat_, emptyStateSubtitleFormat_;
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, pendingImagePath_, folderPath_, status_;
