@@ -257,30 +257,42 @@ public:
         return static_cast<int>(message.wParam);
     }
 
-    void OpenPath(const std::wstring& path)
+    void OpenPath(const std::wstring& path, bool setNavigationRoot = true)
     {
         std::error_code error;
         const fs::path candidate(path);
         if (fs::is_directory(candidate, error))
         {
             folderPath_ = candidate.wstring();
-            RememberFolder(folderPath_);
+            if (setNavigationRoot)
+            {
+                navigationRootFolder_ = folderPath_;
+                RememberFolder(folderPath_);
+            }
             images_.clear();
+            subfolders_.clear();
             thumbnailOffset_ = 0;
             for (const auto& entry : fs::directory_iterator(candidate, fs::directory_options::skip_permission_denied, error))
             {
-                if (!error && entry.is_regular_file(error) && IsSupportedImage(entry.path()))
-                    images_.push_back(entry.path().wstring());
+                if (error) { error.clear(); continue; }
+                if (entry.is_regular_file(error) && IsSupportedImage(entry.path())) images_.push_back(entry.path().wstring());
+                else if (entry.is_directory(error) && !entry.is_symlink(error)) subfolders_.push_back(entry.path().wstring());
+                error.clear();
             }
             std::sort(images_.begin(), images_.end());
+            std::sort(subfolders_.begin(), subfolders_.end());
             thumbnails_.clear();
             QueueThumbnails();
             StartFolderWatcher(folderPath_);
             if (!images_.empty()) { currentImage_ = 0; OpenImage(images_.front()); return; }
-            SetStatus(L"此文件夹没有可由 WIC 直接解码的图片");
+            imageSource_.Reset(); imageBitmap_.Reset(); imagePath_.clear(); pendingImagePath_.clear();
+            SetStatus(subfolders_.empty() ? L"当前文件夹中没有图片或子文件夹" : L"当前文件夹中没有支持的图片，可进入子文件夹继续浏览");
+            UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE);
             return;
         }
         images_.clear();
+        subfolders_.clear();
+        navigationRootFolder_.clear();
         thumbnails_.clear();
         thumbnailOffset_ = 0;
         StopFolderWatcher();
@@ -473,17 +485,17 @@ private:
 
     bool HandleThumbnailClick(int x, int y)
     {
-        if (images_.empty()) return false;
+        if (StripItemCount() == 0) return false;
         RECT client{}; GetClientRect(hwnd_, &client);
         if (y < client.bottom - static_cast<int>(kThumbnailBarHeight + kStatusBarHeight) || y >= client.bottom - static_cast<int>(kStatusBarHeight)) return false;
         const float stripTop = static_cast<float>(client.bottom) - kStatusBarHeight - kThumbnailBarHeight;
         if (y >= stripTop + 108.0f)
         {
             const size_t visible = VisibleThumbnailCount();
-            if (images_.size() > visible)
+            if (StripItemCount() > visible)
             {
                 const float position = std::clamp((x - 18.0f) / std::max(1.0f, static_cast<float>(client.right) - 36.0f), 0.0f, 1.0f);
-                thumbnailOffset_ = static_cast<size_t>(std::round(position * (images_.size() - visible)));
+                thumbnailOffset_ = static_cast<size_t>(std::round(position * (StripItemCount() - visible)));
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             return true;
@@ -491,9 +503,17 @@ private:
         const size_t first = FirstVisibleThumbnail();
         const int slot = static_cast<int>((x - 18) / kThumbnailWidth);
         const size_t index = first + static_cast<size_t>(std::max(0, slot));
-        if (slot >= 0 && index < images_.size() && x < 18 + (slot + 1) * kThumbnailWidth)
+        if (slot >= 0 && index < StripItemCount() && x < 18 + (slot + 1) * kThumbnailWidth)
         {
-            currentImage_ = index;
+            const size_t folders = FolderEntryCount();
+            if (index < folders)
+            {
+                const bool parent = HasParentFolderEntry() && index == 0;
+                const std::wstring target = parent ? fs::path(folderPath_).parent_path().wstring() : subfolders_[index - (HasParentFolderEntry() ? 1 : 0)];
+                OpenPath(target, false);
+                return true;
+            }
+            currentImage_ = index - folders;
             EnsureCurrentThumbnailVisible();
             OpenImage(images_[currentImage_]);
         }
@@ -515,9 +535,9 @@ private:
         POINT point{ screenX, screenY }; ScreenToClient(hwnd_, &point);
         RECT client{}; GetClientRect(hwnd_, &client);
         const int thumbnailTop = client.bottom - static_cast<int>(kThumbnailBarHeight + kStatusBarHeight);
-        if (!images_.empty() && point.y >= thumbnailTop && point.y < client.bottom - static_cast<int>(kStatusBarHeight))
+        if (StripItemCount() > 0 && point.y >= thumbnailTop && point.y < client.bottom - static_cast<int>(kStatusBarHeight))
         {
-            const int maximum = std::max(0, static_cast<int>(images_.size()) - static_cast<int>(VisibleThumbnailCount()));
+            const int maximum = std::max(0, static_cast<int>(StripItemCount()) - static_cast<int>(VisibleThumbnailCount()));
             thumbnailOffset_ = static_cast<size_t>(std::clamp(static_cast<int>(thumbnailOffset_) + (delta > 0 ? -3 : 3), 0, maximum));
             InvalidateRect(hwnd_, nullptr, FALSE);
             return;
@@ -672,17 +692,25 @@ private:
         if (folderPath_.empty()) return;
         const std::wstring selected = imagePath_;
         std::vector<std::wstring> refreshed;
+        std::vector<std::wstring> refreshedFolders;
         std::error_code error;
         for (const auto& entry : fs::directory_iterator(folderPath_, fs::directory_options::skip_permission_denied, error))
-            if (!error && entry.is_regular_file(error) && IsSupportedImage(entry.path())) refreshed.push_back(entry.path().wstring());
+        {
+            if (error) { error.clear(); continue; }
+            if (entry.is_regular_file(error) && IsSupportedImage(entry.path())) refreshed.push_back(entry.path().wstring());
+            else if (entry.is_directory(error) && !entry.is_symlink(error)) refreshedFolders.push_back(entry.path().wstring());
+            error.clear();
+        }
         std::sort(refreshed.begin(), refreshed.end());
+        std::sort(refreshedFolders.begin(), refreshedFolders.end());
         images_ = std::move(refreshed);
+        subfolders_ = std::move(refreshedFolders);
         thumbnails_.clear(); thumbnailOffset_ = 0; QueueThumbnails();
         const auto found = std::find(images_.begin(), images_.end(), selected);
         if (found != images_.end()) currentImage_ = static_cast<size_t>(std::distance(images_.begin(), found));
         else if (!images_.empty()) currentImage_ = std::min(currentImage_, images_.size() - 1);
         if (!images_.empty()) { EnsureCurrentThumbnailVisible(); OpenImage(images_[currentImage_]); }
-        else { imageSource_.Reset(); imageBitmap_.Reset(); imagePath_.clear(); SetStatus(L"当前文件夹没有图片"); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE); }
+        else { imageSource_.Reset(); imageBitmap_.Reset(); imagePath_.clear(); SetStatus(subfolders_.empty() ? L"当前文件夹没有图片或子文件夹" : L"当前文件夹中没有支持的图片，可进入子文件夹继续浏览"); UpdateTitle(); InvalidateRect(hwnd_, nullptr, FALSE); }
     }
 
     fs::path RecentFoldersFile() const
@@ -1282,9 +1310,22 @@ private:
         return !imageSource_ || SUCCEEDED(target_->CreateBitmapFromWicBitmap(imageSource_.Get(), nullptr, &imageBitmap_));
     }
 
+    bool HasParentFolderEntry() const
+    {
+        if (folderPath_.empty() || navigationRootFolder_.empty()) return false;
+        auto left = folderPath_, right = navigationRootFolder_;
+        std::transform(left.begin(), left.end(), left.begin(), towlower);
+        std::transform(right.begin(), right.end(), right.begin(), towlower);
+        return left != right;
+    }
+
+    size_t FolderEntryCount() const { return subfolders_.size() + (HasParentFolderEntry() ? 1u : 0u); }
+    size_t StripItemCount() const { return FolderEntryCount() + images_.size(); }
+
     size_t FirstVisibleThumbnail() const
     {
-        return std::min(thumbnailOffset_, images_.size() > VisibleThumbnailCount() ? images_.size() - VisibleThumbnailCount() : 0ull);
+        const size_t count = StripItemCount();
+        return std::min(thumbnailOffset_, count > VisibleThumbnailCount() ? count - VisibleThumbnailCount() : 0ull);
     }
 
     size_t VisibleThumbnailCount() const { return 8; }
@@ -1292,32 +1333,47 @@ private:
     void EnsureCurrentThumbnailVisible()
     {
         const size_t visible = VisibleThumbnailCount();
-        if (currentImage_ < thumbnailOffset_) thumbnailOffset_ = currentImage_;
-        else if (currentImage_ >= thumbnailOffset_ + visible) thumbnailOffset_ = currentImage_ - visible + 1;
+        const size_t current = FolderEntryCount() + currentImage_;
+        if (current < thumbnailOffset_) thumbnailOffset_ = current;
+        else if (current >= thumbnailOffset_ + visible) thumbnailOffset_ = current - visible + 1;
     }
 
     void DrawThumbnails(const D2D1_SIZE_F& size)
     {
-        if (images_.empty()) return;
+        if (StripItemCount() == 0) return;
         const float top = size.height - kStatusBarHeight - kThumbnailBarHeight;
         target_->FillRectangle(D2D1::RectF(0, top, size.width, size.height), toolbarBrush_.Get());
         const size_t first = FirstVisibleThumbnail();
-        const size_t last = std::min(images_.size(), first + VisibleThumbnailCount());
+        const size_t last = std::min(StripItemCount(), first + VisibleThumbnailCount());
         for (size_t index = first; index < last; ++index)
         {
-            const auto found = thumbnails_.find(index);
             const float left = 18.0f + static_cast<float>(index - first) * kThumbnailWidth;
             const auto frame = D2D1::RectF(left, top + 18.0f, left + kThumbnailWidth - 10.0f, top + 18.0f + kThumbnailHeight);
-            if (index == currentImage_) target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left - 3, top + 15, left + kThumbnailWidth - 7, top + 109), 5, 5), accentBrush_.Get(), 2.0f);
+            const size_t folders = FolderEntryCount();
+            if (index < folders)
+            {
+                const bool parent = HasParentFolderEntry() && index == 0;
+                const std::wstring folder = parent ? fs::path(folderPath_).parent_path().wstring() : subfolders_[index - (parent ? 1 : (HasParentFolderEntry() ? 1 : 0))];
+                target_->FillRoundedRectangle(D2D1::RoundedRect(frame, 7.0f, 7.0f), backgroundBrush_.Get());
+                target_->DrawRoundedRectangle(D2D1::RoundedRect(frame, 7.0f, 7.0f), textBrush_.Get(), 1.0f);
+                const wchar_t* glyph = parent ? L"\xE72B" : L"\xE838";
+                target_->DrawTextW(glyph, static_cast<UINT32>(wcslen(glyph)), iconFormat_.Get(), D2D1::RectF(frame.left, frame.top + 9.0f, frame.right, frame.top + 41.0f), accentBrush_.Get());
+                const std::wstring caption = parent ? L"返回上一级" : FileNameOf(folder);
+                target_->DrawTextW(caption.c_str(), static_cast<UINT32>(caption.size()), titleFormat_.Get(), D2D1::RectF(frame.left + 5.0f, frame.top + 43.0f, frame.right - 5.0f, frame.bottom - 5.0f), textBrush_.Get());
+                continue;
+            }
+            const size_t imageIndex = index - folders;
+            const auto found = thumbnails_.find(imageIndex);
+            if (imageIndex == currentImage_) target_->DrawRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left - 3, top + 15, left + kThumbnailWidth - 7, top + 109), 5, 5), accentBrush_.Get(), 2.0f);
             if (found != thumbnails_.end()) target_->DrawBitmap(found->second.Get(), frame, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
         const float trackTop = top + 111.0f;
         target_->FillRectangle(D2D1::RectF(18.0f, trackTop, size.width - 18.0f, trackTop + 3.0f), backgroundBrush_.Get());
-        if (images_.size() > VisibleThumbnailCount())
+        if (StripItemCount() > VisibleThumbnailCount())
         {
             const float trackWidth = size.width - 36.0f;
-            const float thumbWidth = std::max(34.0f, trackWidth * static_cast<float>(VisibleThumbnailCount()) / images_.size());
-            const float ratio = static_cast<float>(first) / (images_.size() - VisibleThumbnailCount());
+            const float thumbWidth = std::max(34.0f, trackWidth * static_cast<float>(VisibleThumbnailCount()) / StripItemCount());
+            const float ratio = static_cast<float>(first) / (StripItemCount() - VisibleThumbnailCount());
             const float left = 18.0f + (trackWidth - thumbWidth) * ratio;
             target_->FillRectangle(D2D1::RectF(left, trackTop - 1.0f, left + thumbWidth, trackTop + 4.0f), accentBrush_.Get());
         }
@@ -1425,11 +1481,12 @@ private:
     ComPtr<IDWriteTextFormat> textFormat_, iconFormat_, titleFormat_, emptyStateTitleFormat_, emptyStateSubtitleFormat_;
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
-    std::wstring imagePath_, pendingImagePath_, folderPath_, status_;
+    std::wstring imagePath_, pendingImagePath_, folderPath_, navigationRootFolder_, status_;
     std::vector<BYTE> imagePixels_;
     std::vector<BYTE> pdfPixels_;
     std::vector<BYTE> magickPixels_;
     std::vector<std::wstring> images_;
+    std::vector<std::wstring> subfolders_;
     std::vector<std::wstring> recentFolders_;
     std::unordered_map<size_t, ComPtr<ID2D1Bitmap>> thumbnails_;
     std::thread thumbnailWorker_;
