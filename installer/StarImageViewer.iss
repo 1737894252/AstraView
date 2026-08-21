@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "1.3.3"
+#define MyAppVersion "1.3.4"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-1.3.3-x64
+OutputBaseFilename=AstraView-Setup-1.3.4-x64
 SetupIconFile=..\src\StarImageViewer\astraview.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -56,7 +56,6 @@ Root: HKLM; Subkey: "SOFTWARE\AstraView\Capabilities"; ValueType: string; ValueN
 Root: HKLM; Subkey: "SOFTWARE\RegisteredApplications"; ValueType: string; ValueName: "AstraView"; ValueData: "SOFTWARE\AstraView\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\ShellExtension\AstraView.ThumbnailProvider.dll"""; StatusMsg: "正在注册资源管理器缩略图组件…"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -168,10 +167,28 @@ begin
   end;
 end;
 
+procedure RegisterThumbnailProvider;
+var
+  ResultCode: Integer;
+  Provider: String;
+begin
+  Provider := ExpandConstant('{app}\ShellExtension\AstraView.ThumbnailProvider.dll');
+  WizardForm.StatusLabel.Caption := '正在注册资源管理器缩略图组件…';
+  if (not FileExists(Provider)) or
+     (not Exec(ExpandConstant('{sys}\regsvr32.exe'), '/s "' + Provider + '"', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+  begin
+    MsgBox('资源管理器缩略图组件注册失败，安装未完成。错误代码：' + IntToStr(ResultCode),
+      mbError, MB_OK);
+    RaiseException('缩略图组件注册失败 (' + IntToStr(ResultCode) + ')');
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RegisterThumbnailProvider;
     RegisterFileAssociations;
     ConfigureContextMenu(WizardIsTaskSelected('contextmenu'));
     NotifyShellAssociationsChanged;

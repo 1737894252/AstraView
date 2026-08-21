@@ -42,6 +42,13 @@ $msbuild = Join-Path $msbuildRoot 'MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild $nativeProject /restore /m /p:Configuration=$Configuration /p:Platform=x64 "/p:OutDir=$shellOutput\" /p:TargetName=AstraView.ThumbnailProvider
 if ($LASTEXITCODE -ne 0) { throw "原生缩略图组件构建失败 ($LASTEXITCODE)" }
 
+# Explorer loads the COM thumbnail provider from ShellExtension, so its linked
+# PDFium dependency must live beside the provider DLL (the application root is
+# not part of regsvr32/dllhost's DLL search path).
+$pdfium = Join-Path $output 'pdfium.dll'
+if (-not (Test-Path -LiteralPath $pdfium)) { throw "找不到 PDFium 运行库: $pdfium" }
+Copy-Item -LiteralPath $pdfium -Destination (Join-Path $shellOutput 'pdfium.dll') -Force
+
 # PDFtoImage targets several operating systems and CPU architectures. AstraView is an x64 Windows
 # application, and the required x64 DLLs are already copied to the publish root.
 $unusedNativeDirectories = @(

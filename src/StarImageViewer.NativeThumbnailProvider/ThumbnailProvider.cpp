@@ -279,9 +279,16 @@ public:
             }
         }
         if (input.empty()) { HRESULT hr = SaveStreamToTemporaryFile(input); if (FAILED(hr)) return hr; temporary = true; }
+        // WIC already handled ordinary formats directly from the stream.  Route
+        // PSD, RAW and other non-WIC formats through the self-contained worker:
+        // it uses the same Q8 decoder as AstraView and avoids depending on an
+        // ImageMagick runtime inside Explorer's COM surrogate process.
+        const UINT requestedSize = std::min(size, 2048u);
         HRESULT result = IsPdfPath(input)
-            ? DecodePdf(input, std::min(size, 2048u), bitmap)
-            : DecodeWithMagick(input, std::min(size, 2048u), bitmap);
+            ? DecodePdf(input, requestedSize, bitmap)
+            : RequestThumbnail(input, requestedSize, bitmap, alpha);
+        if (FAILED(result) && !IsPdfPath(input))
+            result = DecodeWithMagick(input, requestedSize, bitmap);
         if (temporary) DeleteFileW(input.c_str());
         if (SUCCEEDED(result)) *alpha = WTSAT_ARGB;
         return result;
