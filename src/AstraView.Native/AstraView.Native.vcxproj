@@ -34,6 +34,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
+    <ResourceCompile Include="AstraView.rc" />
     <MagickRuntime Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_MagickWand_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_MagickCore_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_bzip2_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_freetype_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_lcms_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_lqr_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_raqm_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_xml_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_zlib_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_glib_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_fribidi_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\CORE_RL_harfbuzz_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcomp140.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcruntime140.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\vcruntime140_1.dll" />
     <MagickModules Include="$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\modules\coders\IM_MOD_RL_psd_.dll;$(ProjectDir)..\..\tools\vendor\ImageMagick-Q8\modules\coders\IM_MOD_RL_raw_.dll" />
   </ItemGroup>

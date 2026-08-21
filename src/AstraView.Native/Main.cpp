@@ -12,6 +12,7 @@
 #include <fpdfview.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include "Resource.h"
 
 #include <algorithm>
 #include <atomic>
@@ -218,7 +219,8 @@ public:
         WNDCLASSEXW wc{ sizeof(wc) };
         wc.hInstance = instance_;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-        wc.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+        appIcon_ = LoadIconW(instance_, MAKEINTRESOURCEW(IDI_ASTRAVIEW));
+        wc.hIcon = appIcon_;
         wc.lpszClassName = kClassName;
         wc.lpfnWndProc = WindowProc;
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
@@ -1331,8 +1333,6 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0.045f, 0.055f, 0.075f));
         target_->FillRectangle(D2D1::RectF(0, 0, size.width, kToolbarHeight), toolbarBrush_.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(28.0f, 29.0f), 15.0f, 15.0f), accentBrush_.Get());
-        DrawButton(L"✦", 14.0f, 28.0f);
         DrawButton(L"打开", 58.0f, 54.0f);
         DrawButton(L"文件夹", 118.0f, 70.0f);
         DrawButton(L"最近", 194.0f, 56.0f);
@@ -1368,6 +1368,8 @@ private:
         target_->DrawTextW(footer.c_str(), static_cast<UINT32>(footer.size()), textFormat_.Get(), D2D1::RectF(16, statusTop, std::max(16.0f, size.width - 140.0f), size.height), textBrush_.Get());
         target_->DrawTextW(ZoomStatus().c_str(), static_cast<UINT32>(ZoomStatus().size()), textFormat_.Get(), D2D1::RectF(size.width - 108.0f, statusTop + 6.0f, size.width - 18.0f, size.height - 6.0f), accentBrush_.Get());
         const HRESULT result = target_->EndDraw();
+        if (SUCCEEDED(result) && appIcon_)
+            DrawIconEx(ps.hdc, 12, 13, appIcon_, 32, 32, 0, nullptr, DI_NORMAL);
         if (result == D2DERR_RECREATE_TARGET)
         {
             imageBitmap_.Reset(); thumbnails_.clear(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
@@ -1376,6 +1378,7 @@ private:
     }
 
     HINSTANCE instance_{};
+    HICON appIcon_{};
     HWND hwnd_{};
     ComPtr<IWICImagingFactory> wic_;
     ComPtr<ID2D1Factory> d2dFactory_;
