@@ -45,7 +45,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked
 Name: "contextmenu"; Description: "添加“使用 AstraView 打开”到图片右键菜单"; GroupDescription: "资源管理器集成："; Flags: unchecked
-Name: "refreshthumbcache"; Description: "清理旧缩略图缓存并重启资源管理器"; GroupDescription: "资源管理器集成："; Flags: unchecked
+Name: "refreshthumbcache"; Description: "通知资源管理器刷新缩略图"; GroupDescription: "资源管理器集成："; Flags: unchecked
 
 [Registry]
 Root: HKLM; Subkey: "SOFTWARE\Classes\AstraView.Image"; ValueType: string; ValueName: ""; ValueData: "Image File"; Flags: uninsdeletekey
@@ -78,24 +78,11 @@ begin
 end;
 
 procedure RefreshThumbnailCache;
-var
-  ResultCode: Integer;
-  CachePattern: String;
 begin
-  WizardForm.StatusLabel.Caption := '正在清理旧缩略图缓存…';
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM explorer.exe', '',
-    SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM dllhost.exe', '',
-    SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(800);
-  CachePattern := ExpandConstant(
-    '{localappdata}\Microsoft\Windows\Explorer\thumbcache_*.db');
-  DelTree(CachePattern, False, True, False);
-  DelTree(ExpandConstant('{localappdata}\IconCache*.db'), False, True, False);
-  Exec(ExpandConstant('{sys}\ie4uinit.exe'), '-ClearIconCache', '',
-    SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{win}\explorer.exe'), '', '',
-    SW_SHOWNORMAL, ewNoWait, ResultCode);
+  { Cache maintenance must never block an installation. Windows will recreate
+    thumbnails when Explorer receives the association-change notification. }
+  WizardForm.StatusLabel.Caption := '正在通知资源管理器刷新缩略图…';
+  NotifyShellAssociationsChanged;
 end;
 
 procedure RegisterFileAssociations;
