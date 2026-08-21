@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "1.3.5"
+#define MyAppVersion "1.3.6"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-1.3.5-x64
+OutputBaseFilename=AstraView-Setup-1.3.6-x64
 SetupIconFile=..\src\StarImageViewer\astraview.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -207,18 +207,23 @@ var
   ResultCode: Integer;
   LegacyProvider: String;
   NativeProvider: String;
+  ThumbnailWorker: String;
 begin
   Result := '';
   LegacyProvider := ExpandConstant('{app}\ShellExtension\StarImageViewer.ThumbnailProvider.dll');
   NativeProvider := ExpandConstant('{app}\ShellExtension\AstraView.ThumbnailProvider.dll');
-  { Thumbnail handlers are hosted by dllhost.exe. Release the old DLL before
-    Setup tries to overwrite it; this avoids Inno's unreliable COM Surrogate page. }
-  if FileExists(LegacyProvider) or FileExists(NativeProvider) then
+  ThumbnailWorker := ExpandConstant('{app}\AstraView.ThumbnailWorker.exe');
+  { The thumbnail DLL is hosted by the worker and by COM Surrogate. Release both
+    before Setup overwrites the files, otherwise DeleteFile may fail with code 5. }
+  if FileExists(LegacyProvider) or FileExists(NativeProvider) or
+     FileExists(ThumbnailWorker) then
   begin
     WizardForm.StatusLabel.Caption := '正在关闭旧版缩略图组件…';
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM AstraView.ThumbnailWorker.exe', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM dllhost.exe', '',
       SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Sleep(300);
+    Sleep(500);
   end;
   { Upgrades from 1.2 and earlier used a managed .NET Framework provider. }
   if FileExists(LegacyProvider) then

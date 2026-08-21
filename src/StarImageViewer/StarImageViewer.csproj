@@ -10,8 +10,8 @@
     <AssemblyTitle>AstraView</AssemblyTitle>
     <Product>AstraView</Product>
     <Company>AstraView</Company>
-    <Version>1.3.5</Version>
-    <FileVersion>1.3.5.0</FileVersion>
+    <Version>1.3.6</Version>
+    <FileVersion>1.3.6.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="astraview.ico" />

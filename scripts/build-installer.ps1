@@ -16,4 +16,4 @@ if (-not $compiler) { throw '未找到 Inno Setup 6，请先安装后重试。' 
 
 & $compiler (Join-Path $root 'installer\StarImageViewer.iss')
 if ($LASTEXITCODE -ne 0) { throw "安装包编译失败 ($LASTEXITCODE)" }
-Write-Host "安装包: $(Join-Path $root 'artifacts\installer\AstraView-Setup-1.3.5-x64.exe')"
+Write-Host "安装包: $(Join-Path $root 'artifacts\installer\AstraView-Setup-1.3.6-x64.exe')"
