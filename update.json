@@ -1,9 +1,9 @@
 {
-  "version": "1.3.5",
-  "releaseName": "AstraView 1.3.5",
-  "releaseNotes": "修复资源管理器首次请求 PSD、PDF 与 RAW 缩略图时工作进程尚未就绪的问题，降低首次缩略图被系统缓存为失败占位图的概率。",
-  "downloadUrl": "https://github.com/1737894252/AstraView/releases/download/v1.3.5/AstraView-Setup-1.3.5-x64.exe",
-  "fileName": "AstraView-Setup-1.3.5-x64.exe",
-  "sha256": "541F0FF3FFF3C617371CF10C754D75A3EE5F0A2112B54D59BF8C5F1854CAEC75",
-  "size": 67265190
+  "version": "1.4.0",
+  "releaseName": "AstraView 1.4.0",
+  "releaseNotes": "提升安装升级稳定性：安装前自动关闭缩略图工作进程，避免 DLL 被占用而无法覆盖；资源管理器缩略图刷新改为非阻塞通知，不再关闭资源管理器或等待系统缓存工具。",
+  "downloadUrl": "https://github.com/1737894252/AstraView/releases/download/v1.4.0/AstraView-Setup-1.4.0-x64.exe",
+  "fileName": "AstraView-Setup-1.4.0-x64.exe",
+  "sha256": "AFB6A021C0A76E0EB94A8A12C64352D859EA8B3A148FEE680A9901F0EDCA54B4",
+  "size": 67266307
 }
