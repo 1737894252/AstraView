@@ -1262,6 +1262,10 @@ private:
         if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 14.0f, L"zh-CN", &textFormat_))) return false;
         textFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         textFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        if (FAILED(dwriteFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 18.0f, L"zh-CN", &emptyStateFormat_))) return false;
+        emptyStateFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        emptyStateFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        emptyStateFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
         return RecreateImageBitmap();
     }
 
@@ -1359,7 +1363,10 @@ private:
         else
         {
             const wchar_t* prompt = L"AstraView Native Preview\n拖入图片，或按 Ctrl+O 打开";
-            target_->DrawTextW(prompt, static_cast<UINT32>(wcslen(prompt)), textFormat_.Get(), D2D1::RectF(0, size.height / 2 - 25, size.width, size.height / 2 + 25), textBrush_.Get());
+            const float contentTop = kToolbarHeight;
+            const float contentBottom = size.height - kStatusBarHeight;
+            const float contentCenter = (contentTop + contentBottom) / 2.0f;
+            target_->DrawTextW(prompt, static_cast<UINT32>(wcslen(prompt)), emptyStateFormat_.Get(), D2D1::RectF(0, contentCenter - 38.0f, size.width, contentCenter + 38.0f), textBrush_.Get());
         }
         DrawThumbnails(size);
         const float statusTop = size.height - kStatusBarHeight;
@@ -1372,7 +1379,7 @@ private:
             DrawIconEx(ps.hdc, 12, 13, appIcon_, 32, 32, 0, nullptr, DI_NORMAL);
         if (result == D2DERR_RECREATE_TARGET)
         {
-            imageBitmap_.Reset(); thumbnails_.clear(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
+            imageBitmap_.Reset(); thumbnails_.clear(); emptyStateFormat_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
         }
         EndPaint(hwnd_, &ps);
     }
@@ -1385,7 +1392,7 @@ private:
     ComPtr<IDWriteFactory> dwriteFactory_;
     ComPtr<ID2D1HwndRenderTarget> target_;
     ComPtr<ID2D1SolidColorBrush> backgroundBrush_, toolbarBrush_, textBrush_, accentBrush_;
-    ComPtr<IDWriteTextFormat> textFormat_;
+    ComPtr<IDWriteTextFormat> textFormat_, emptyStateFormat_;
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
     std::wstring imagePath_, pendingImagePath_, folderPath_, status_;
