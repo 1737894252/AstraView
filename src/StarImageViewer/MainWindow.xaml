@@ -45,6 +45,8 @@
                                 <TextBlock Text="文件夹" Margin="7,0,0,0" FontWeight="SemiBold" />
                             </StackPanel>
                         </Button>
+                        <Button Style="{StaticResource ToolbarButton}" Content="&#xE838;" FontFamily="Segoe MDL2 Assets"
+                                FontSize="15" Click="OpenInExplorer_Click" ToolTip="在文件资源管理器中打开当前文件夹" />
                         <Button Style="{StaticResource ToolbarButton}" Click="RecentFolders_Click" ToolTip="最近打开的文件夹">
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="RecentFoldersMenu" Opened="RecentFoldersMenu_Opened"
@@ -140,7 +142,49 @@
             <!-- Unobstructed image canvas -->
             <Border Grid.Row="1" x:Name="Viewport" ClipToBounds="True"
                     MouseWheel="Viewport_MouseWheel" MouseLeftButtonDown="Viewport_MouseLeftButtonDown"
-                    MouseLeftButtonUp="Viewport_MouseLeftButtonUp" MouseMove="Viewport_MouseMove">
+                    MouseLeftButtonUp="Viewport_MouseLeftButtonUp" MouseMove="Viewport_MouseMove"
+                    ContextMenuOpening="ImageContextMenu_Opening">
+                <Border.ContextMenu>
+                    <ContextMenu x:Name="ImageContextMenu" Background="#242932" BorderBrush="#3B424E" BorderThickness="1"
+                                 Padding="5" HasDropShadow="True">
+                        <ContextMenu.Template>
+                            <ControlTemplate TargetType="ContextMenu">
+                                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                </Border>
+                            </ControlTemplate>
+                        </ContextMenu.Template>
+                        <ContextMenu.Resources>
+                            <Style TargetType="MenuItem">
+                                <Setter Property="Foreground" Value="#F1F3F7" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Padding" Value="11,8" />
+                                <Setter Property="MinWidth" Value="230" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="MenuItem">
+                                            <Border x:Name="MenuItemBorder" Background="{TemplateBinding Background}"
+                                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter ContentSource="Header" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsHighlighted" Value="True">
+                                                    <Setter TargetName="MenuItemBorder" Property="Background" Value="#3A414D" />
+                                                </Trigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="MenuItemBorder" Property="Opacity" Value="0.48" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ContextMenu.Resources>
+                        <MenuItem x:Name="ShowInExplorerMenuItem" Header="在文件资源管理器中显示" Click="ShowInExplorer_Click" />
+                    </ContextMenu>
+                </Border.ContextMenu>
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                         <GradientStop Color="#171B21" Offset="0" />

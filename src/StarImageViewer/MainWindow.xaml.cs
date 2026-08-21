@@ -2,6 +2,7 @@ using Microsoft.Win32;
 using StarImageViewer.Core;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -729,6 +730,49 @@ public partial class MainWindow : Window
         ApplyZoom();
         PanTransform.X = PanTransform.Y = 0;
         CenterPicture();
+    }
+
+    private string? GetExplorerFolder()
+    {
+        if (!string.IsNullOrWhiteSpace(watchedFolder) && Directory.Exists(watchedFolder)) return watchedFolder;
+        if (!string.IsNullOrWhiteSpace(currentPath))
+        {
+            var folder = Path.GetDirectoryName(currentPath);
+            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder)) return folder;
+        }
+        return null;
+    }
+
+    private static void LaunchExplorer(string arguments)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = arguments,
+            UseShellExecute = true
+        });
+    }
+
+    private void OpenInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        var folder = GetExplorerFolder();
+        if (folder == null)
+        {
+            StatusText.Text = "请先打开图片或文件夹";
+            return;
+        }
+        LaunchExplorer($"\"{folder}\"");
+    }
+
+    private void ImageContextMenu_Opening(object sender, ContextMenuEventArgs e)
+    {
+        ShowInExplorerMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(currentPath) && File.Exists(currentPath);
+    }
+
+    private void ShowInExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(currentPath) || !File.Exists(currentPath)) return;
+        LaunchExplorer($"/select,\"{currentPath}\"");
     }
     private void Rotate_Click(object sender, RoutedEventArgs e) => RotateTransform.Angle = (RotateTransform.Angle + 90) % 360;
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
