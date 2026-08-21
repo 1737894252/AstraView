@@ -1,5 +1,5 @@
 #define MyAppName "AstraView"
-#define MyAppVersion "1.3.4"
+#define MyAppVersion "1.3.5"
 #define MyAppPublisher "AstraView"
 #define MyAppExeName "AstraView.exe"
 #define ThumbnailClsid "{5E2D8E48-6F15-4C3D-AED8-BDA6544D2253}"
@@ -14,7 +14,7 @@ DefaultGroupName={#MyAppName}
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\artifacts\installer
-OutputBaseFilename=AstraView-Setup-1.3.4-x64
+OutputBaseFilename=AstraView-Setup-1.3.5-x64
 SetupIconFile=..\src\StarImageViewer\astraview.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -85,10 +85,15 @@ begin
   WizardForm.StatusLabel.Caption := '正在清理旧缩略图缓存…';
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM explorer.exe', '',
     SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM dllhost.exe', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(800);
   CachePattern := ExpandConstant(
     '{localappdata}\Microsoft\Windows\Explorer\thumbcache_*.db');
   DelTree(CachePattern, False, True, False);
+  DelTree(ExpandConstant('{localappdata}\IconCache*.db'), False, True, False);
+  Exec(ExpandConstant('{sys}\ie4uinit.exe'), '-ClearIconCache', '',
+    SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{win}\explorer.exe'), '', '',
     SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;

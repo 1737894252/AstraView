@@ -173,10 +173,15 @@ HANDLE ConnectWorker() {
     HANDLE pipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe != INVALID_HANDLE_VALUE) return pipe;
     StartWorker();
-    for (int attempt = 0; attempt < 20; ++attempt) {
+    // WaitNamedPipe returns immediately with ERROR_FILE_NOT_FOUND until the
+    // freshly spawned worker has created its first server pipe.  Always pause
+    // between retries; otherwise all attempts are exhausted in milliseconds
+    // and Explorer records a failed-thumbnail cache entry.
+    for (int attempt = 0; attempt < 80; ++attempt) {
         WaitNamedPipeW(kPipeName, 100);
         pipe = CreateFileW(kPipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         if (pipe != INVALID_HANDLE_VALUE) return pipe;
+        Sleep(100);
     }
     return INVALID_HANDLE_VALUE;
 }
@@ -347,11 +352,23 @@ extern "C" HRESULT __stdcall DllRegisterServer() {
     HRESULT hr = SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + kClsidText + L"\\InprocServer32", nullptr, module); if (FAILED(hr)) return hr;
     SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + kClsidText + L"\\InprocServer32", L"ThreadingModel", L"Apartment");
     SetString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved", kClsidText, L"AstraView Thumbnail Provider");
-    for (auto extension : kExtensions) { SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\SystemFileAssociations\\") + extension + L"\\shellex\\" + kThumbnailHandler, nullptr, kClsidText); SetString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\KindMap", extension, L"picture"); }
+    for (auto extension : kExtensions) {
+        hr = SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\SystemFileAssociations\\") + extension + L"\\shellex\\" + kThumbnailHandler, nullptr, kClsidText); if (FAILED(hr)) return hr;
+        // Register directly on the extension as well.  Windows Shell does not
+        // consistently fall back to SystemFileAssociations when an extension
+        // only has OpenWithProgids (the normal AstraView installation state).
+        hr = SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\") + extension + L"\\shellex\\" + kThumbnailHandler, nullptr, kClsidText); if (FAILED(hr)) return hr;
+        SetString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\KindMap", extension, L"picture");
+    }
+    hr = SetString(HKEY_LOCAL_MACHINE, std::wstring(L"SOFTWARE\\Classes\\AstraView.Image\\shellex\\") + kThumbnailHandler, nullptr, kClsidText); if (FAILED(hr)) return hr;
     return S_OK;
 }
 extern "C" HRESULT __stdcall DllUnregisterServer() {
-    for (auto extension : kExtensions) RegDeleteTreeW(HKEY_LOCAL_MACHINE, (std::wstring(L"SOFTWARE\\Classes\\SystemFileAssociations\\") + extension + L"\\shellex\\" + kThumbnailHandler).c_str());
+    for (auto extension : kExtensions) {
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, (std::wstring(L"SOFTWARE\\Classes\\SystemFileAssociations\\") + extension + L"\\shellex\\" + kThumbnailHandler).c_str());
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, (std::wstring(L"SOFTWARE\\Classes\\") + extension + L"\\shellex\\" + kThumbnailHandler).c_str());
+    }
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, (std::wstring(L"SOFTWARE\\Classes\\AstraView.Image\\shellex\\") + kThumbnailHandler).c_str());
     HKEY approved{}; if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved", 0, KEY_SET_VALUE, &approved) == ERROR_SUCCESS) { RegDeleteValueW(approved, kClsidText); RegCloseKey(approved); }
     RegDeleteTreeW(HKEY_LOCAL_MACHINE, (std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + kClsidText).c_str()); return S_OK;
 }
