@@ -30,7 +30,6 @@ public partial class MainWindow : Window
         public required BitmapSource Bitmap { get; init; }
         public int OriginalWidth { get; init; }
         public int OriginalHeight { get; init; }
-        public bool IsPreview => Bitmap.PixelWidth < OriginalWidth || Bitmap.PixelHeight < OriginalHeight;
     }
     private string? currentPath;
     private List<string> siblings = new();
@@ -41,8 +40,6 @@ public partial class MainWindow : Window
     private CancellationTokenSource? thumbnailCancellation;
     private CancellationTokenSource? folderRefreshCancellation;
     private CancellationTokenSource? imageLoadCancellation;
-    private Task? highResolutionLoadTask;
-    private bool userAdjustedView;
     private int originalPixelWidth;
     private int originalPixelHeight;
     private FileSystemWatcher? folderWatcher;
@@ -101,8 +98,9 @@ public partial class MainWindow : Window
         try
         {
             StatusText.Text = "正在加载…";
-            var previewLimit = GetPreviewDecodeDimension();
-            var decoded = await Task.Run(() => DecodeBitmap(path, previewLimit), token);
+            // The viewer displays the original decoded pixel dimensions in a single pass. This avoids
+            // replacing a low-resolution preview with a second bitmap after the image is already visible.
+            var decoded = await Task.Run(() => DecodeBitmap(path, int.MaxValue), token);
             token.ThrowIfCancellationRequested();
             var bitmap = decoded.Bitmap;
             Picture.Source = bitmap;
@@ -113,7 +111,6 @@ public partial class MainWindow : Window
             CenterPicture();
             RotateTransform.Angle = 0;
             PanTransform.X = PanTransform.Y = 0;
-            userAdjustedView = false;
             originalPixelWidth = decoded.OriginalWidth;
             originalPixelHeight = decoded.OriginalHeight;
             currentPath = Path.GetFullPath(path);
@@ -121,11 +118,8 @@ public partial class MainWindow : Window
             Title = $"{Path.GetFileName(path)} — AstraView";
             EmptyHint.Visibility = Visibility.Collapsed;
             RefreshSiblings();
-            StatusText.Text = BuildImageStatus(path, decoded.IsPreview);
+            StatusText.Text = BuildImageStatus(path);
             FitToWindow();
-            highResolutionLoadTask = decoded.IsPreview && SupportsProgressiveUpgrade(path)
-                ? UpgradeToHighResolutionAsync(currentPath, token)
-                : Task.CompletedTask;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -135,51 +129,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private int GetPreviewDecodeDimension()
-    {
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var viewportPixels = Math.Max(Viewport.ActualWidth * dpi.DpiScaleX,
-            Viewport.ActualHeight * dpi.DpiScaleY);
-        return (int)Math.Max(1200, Math.Min(2048, Math.Ceiling(viewportPixels * 1.5)));
-    }
-
-    private async Task UpgradeToHighResolutionAsync(string path, CancellationToken token)
-    {
-        try
-        {
-            await Task.Delay(450, token);
-            var decoded = await Task.Run(() => DecodeBitmap(path, 8192), token);
-            token.ThrowIfCancellationRequested();
-            if (!string.Equals(currentPath, path, StringComparison.OrdinalIgnoreCase)) return;
-
-            var previousDisplayedWidth = Picture.Width * zoom;
-            Picture.Source = decoded.Bitmap;
-            Picture.Width = decoded.Bitmap.PixelWidth;
-            Picture.Height = decoded.Bitmap.PixelHeight;
-            originalPixelWidth = decoded.OriginalWidth;
-            originalPixelHeight = decoded.OriginalHeight;
-            if (userAdjustedView && Picture.Width > 0)
-            {
-                zoom = previousDisplayedWidth / Picture.Width;
-                ApplyZoom();
-                CenterPicture();
-            }
-            else FitToWindow();
-            StatusText.Text = BuildImageStatus(path, decoded.IsPreview);
-        }
-        catch (OperationCanceledException) { }
-        catch
-        {
-            // The quick preview remains usable if the optional high-resolution pass fails.
-        }
-    }
-
-    private string BuildImageStatus(string path, bool preview)
+    private string BuildImageStatus(string path)
     {
         var status = $"{originalPixelWidth} × {originalPixelHeight}   {FormatBytes(new FileInfo(path).Length)}";
         var position = siblings.FindIndex(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
         if (position >= 0) status += $"   {position + 1} / {siblings.Count}";
-        if (preview) status += "   快速预览";
         return status;
     }
 
@@ -210,16 +164,6 @@ public partial class MainWindow : Window
             OriginalWidth = checked((int)decoded.OriginalWidth),
             OriginalHeight = checked((int)decoded.OriginalHeight)
         };
-    }
-
-    private static bool SupportsProgressiveUpgrade(string path)
-    {
-        switch (Path.GetExtension(path).ToLowerInvariant())
-        {
-            case ".png": case ".jpg": case ".jpeg": case ".jpe": case ".jfif":
-            case ".bmp": case ".gif": case ".ico": case ".tif": case ".tiff": return true;
-            default: return false;
-        }
     }
 
     private static DecodedBitmap DecodeWithWindowsImaging(string path, int maxDimension)
@@ -385,7 +329,7 @@ public partial class MainWindow : Window
         }
 
         if (Picture.Source is BitmapSource && currentPath != null && File.Exists(currentPath))
-            StatusText.Text = BuildImageStatus(currentPath, false);
+            StatusText.Text = BuildImageStatus(currentPath);
     }
 
     private static List<string> EnumerateBrowsableDirectories(string folder)
@@ -778,12 +722,9 @@ public partial class MainWindow : Window
     }
     private async void Previous_Click(object sender, RoutedEventArgs e) => await NavigateAsync(-1);
     private async void Next_Click(object sender, RoutedEventArgs e) => await NavigateAsync(1);
-    private void Fit_Click(object sender, RoutedEventArgs e) { userAdjustedView = false; FitToWindow(); }
-    private async void Actual_Click(object sender, RoutedEventArgs e)
+    private void Fit_Click(object sender, RoutedEventArgs e) => FitToWindow();
+    private void Actual_Click(object sender, RoutedEventArgs e)
     {
-        var pendingHighResolution = highResolutionLoadTask;
-        if (pendingHighResolution != null) await pendingHighResolution;
-        userAdjustedView = true;
         zoom = 1;
         ApplyZoom();
         PanTransform.X = PanTransform.Y = 0;
@@ -803,7 +744,6 @@ public partial class MainWindow : Window
     private void Viewport_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         if (Picture.Source == null) return;
-        userAdjustedView = true;
         zoom *= e.Delta > 0 ? 1.15 : 1 / 1.15;
         ApplyZoom();
         e.Handled = true;
