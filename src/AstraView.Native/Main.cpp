@@ -65,8 +65,7 @@ struct MagickApi
     MagickWandHandle* (*create)(){};
     MagickWandHandle* (*destroy)(MagickWandHandle*){};
     MagickBoolean (*readFile)(MagickWandHandle*, const char*){};
-    size_t (*getNumberImages)(MagickWandHandle*){};
-    MagickWandHandle* (*mergeImageLayers)(MagickWandHandle*, int){};
+    MagickBoolean (*setIteratorIndex)(MagickWandHandle*, ptrdiff_t){};
     size_t (*getWidth)(MagickWandHandle*){};
     size_t (*getHeight)(MagickWandHandle*){};
     MagickBoolean (*resize)(MagickWandHandle*, size_t, size_t, int, double){};
@@ -85,31 +84,18 @@ struct MagickApi
         create = reinterpret_cast<MagickWandHandle* (*)()>(GetProcAddress(module, "NewMagickWand"));
         destroy = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*)>(GetProcAddress(module, "DestroyMagickWand"));
         readFile = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, const char*)>(GetProcAddress(module, "MagickReadImage"));
-        getNumberImages = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetNumberImages"));
-        mergeImageLayers = reinterpret_cast<MagickWandHandle* (*)(MagickWandHandle*, int)>(GetProcAddress(module, "MagickMergeImageLayers"));
+        setIteratorIndex = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, ptrdiff_t)>(GetProcAddress(module, "MagickSetIteratorIndex"));
         getWidth = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageWidth"));
         getHeight = reinterpret_cast<size_t (*)(MagickWandHandle*)>(GetProcAddress(module, "MagickGetImageHeight"));
         resize = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, size_t, size_t, int, double)>(GetProcAddress(module, "MagickResizeImage"));
         exportPixels = reinterpret_cast<MagickBoolean (*)(MagickWandHandle*, ptrdiff_t, ptrdiff_t, size_t, size_t, const char*, int, void*)>(GetProcAddress(module, "MagickExportImagePixels"));
-        if (!genesis || !create || !destroy || !readFile || !getNumberImages || !mergeImageLayers || !getWidth || !getHeight || !resize || !exportPixels) return false;
+        if (!genesis || !create || !destroy || !readFile || !setIteratorIndex || !getWidth || !getHeight || !resize || !exportPixels) return false;
         genesis();
         return true;
     }
 };
 
 MagickApi kMagick;
-
-constexpr int kFlattenLayerMethod = 14;
-
-bool FlattenMagickLayers(MagickWandHandle*& wand)
-{
-    if (!wand || kMagick.getNumberImages(wand) <= 1) return true;
-    MagickWandHandle* flattened = kMagick.mergeImageLayers(wand, kFlattenLayerMethod);
-    if (!flattened) return false;
-    kMagick.destroy(wand);
-    wand = flattened;
-    return true;
-}
 
 void EnsurePdfiumInitialized()
 {
@@ -188,6 +174,13 @@ bool IsPdf(const std::wstring& path)
     auto extension = fs::path(path).extension().wstring();
     std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
     return extension == L".pdf";
+}
+
+bool IsPsd(const std::wstring& path)
+{
+    auto extension = fs::path(path).extension().wstring();
+    std::transform(extension.begin(), extension.end(), extension.begin(), towlower);
+    return extension == L".psd" || extension == L".psb";
 }
 
 std::string ToUtf8(const std::wstring& value)
@@ -786,7 +779,7 @@ private:
         if (!wand) return false;
         const std::string utf8Path = ToUtf8(path);
         if (!kMagick.readFile(wand, utf8Path.c_str())) { kMagick.destroy(wand); return false; }
-        if (!FlattenMagickLayers(wand)) { kMagick.destroy(wand); return false; }
+        if (IsPsd(path) && !kMagick.setIteratorIndex(wand, 0)) { kMagick.destroy(wand); return false; }
         size_t width = kMagick.getWidth(wand), height = kMagick.getHeight(wand);
         if (!width || !height) { kMagick.destroy(wand); return false; }
         constexpr size_t maximumDimension = 8192;
@@ -1218,7 +1211,7 @@ private:
         if (!wand) return nullptr;
         const std::string utf8Path = ToUtf8(task.path);
         if (!kMagick.readFile(wand, utf8Path.c_str())) { kMagick.destroy(wand); return nullptr; }
-        if (!FlattenMagickLayers(wand)) { kMagick.destroy(wand); return nullptr; }
+        if (IsPsd(task.path) && !kMagick.setIteratorIndex(wand, 0)) { kMagick.destroy(wand); return nullptr; }
         const size_t sourceWidth = kMagick.getWidth(wand), sourceHeight = kMagick.getHeight(wand);
         if (!sourceWidth || !sourceHeight) { kMagick.destroy(wand); return nullptr; }
         const double scale = std::min(static_cast<double>(kThumbnailWidth) / sourceWidth, static_cast<double>(kThumbnailHeight) / sourceHeight);
