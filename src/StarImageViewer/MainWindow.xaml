@@ -45,8 +45,6 @@
                                 <TextBlock Text="文件夹" Margin="7,0,0,0" FontWeight="SemiBold" />
                             </StackPanel>
                         </Button>
-                        <Button Style="{StaticResource ToolbarButton}" Content="&#xE838;" FontFamily="Segoe MDL2 Assets"
-                                FontSize="15" Click="OpenInExplorer_Click" ToolTip="在文件资源管理器中打开当前文件夹" />
                         <Button Style="{StaticResource ToolbarButton}" Click="RecentFolders_Click" ToolTip="最近打开的文件夹">
                             <Button.ContextMenu>
                                 <ContextMenu x:Name="RecentFoldersMenu" Opened="RecentFoldersMenu_Opened"
@@ -222,11 +220,15 @@
                         <ColumnDefinition Width="150" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="16,0,10,0">
-                        <TextBlock Text="当前文件夹" Foreground="#777F90" FontSize="10" />
-                        <TextBlock x:Name="FolderNameText" Text="图片" FontSize="13" FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
-                    </StackPanel>
+                    <Button Grid.Column="0" Style="{StaticResource ToolbarButton}" Click="OpenInExplorer_Click"
+                            ToolTip="在文件资源管理器中打开当前文件夹" HorizontalContentAlignment="Left"
+                            Padding="8,6" Margin="8,0,2,0">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="当前文件夹" Foreground="#777F90" FontSize="10" />
+                            <TextBlock x:Name="FolderNameText" Text="图片" FontSize="13" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Button>
                     <Grid Grid.Column="1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*" />
