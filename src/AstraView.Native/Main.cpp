@@ -9,6 +9,7 @@
 #include <urlmon.h>
 #include <d2d1.h>
 #include <dwrite.h>
+#include <dwmapi.h>
 #include <fpdfview.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -31,6 +32,7 @@
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -232,6 +234,8 @@ public:
             CW_USEDEFAULT, CW_USEDEFAULT, 1280, 820, nullptr, nullptr, instance_, this);
         if (!hwnd_)
             return 1;
+        const COLORREF chromeBorder = RGB(17, 20, 25);
+        DwmSetWindowAttribute(hwnd_, DWMWA_BORDER_COLOR, &chromeBorder, sizeof(chromeBorder));
         DragAcceptFiles(hwnd_, TRUE);
         StartThumbnailWorker();
         StartImageWorker();
@@ -384,7 +388,8 @@ private:
         case WM_MOUSEWHEEL: HandleWheel(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), GET_WHEEL_DELTA_WPARAM(wParam)); return 0;
         case WM_LBUTTONDOWN: dragging_ = true; lastMouse_ = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) }; mouseDown_ = lastMouse_; SetCapture(hwnd_); return 0;
         case WM_LBUTTONUP: OnMouseUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
-        case WM_MOUSEMOVE: Pan(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
+        case WM_MOUSEMOVE: UpdateHover(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); Pan(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)); return 0;
+        case WM_MOUSELEAVE: SetHover(-1); return 0;
         case WM_LBUTTONDBLCLK: FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); return 0;
         case WM_DROPFILES: HandleDrop(reinterpret_cast<HDROP>(wParam)); return 0;
         case WM_KEYDOWN: HandleKey(wParam); return 0;
@@ -455,6 +460,39 @@ private:
         else if (x >= 416 && x < 458) RotateClockwise();
         else if (x >= 458 && x < 506) { FitImage(); InvalidateRect(hwnd_, nullptr, FALSE); }
         else if (x >= 506 && x < 550) { SetActualSize(); InvalidateRect(hwnd_, nullptr, FALSE); }
+    }
+
+    int HitToolbarItem(int x, int y, int clientWidth) const
+    {
+        if (y < 0 || y >= static_cast<int>(kToolbarHeight)) return -1;
+        if (x >= 52 && x < 118) return 1;
+        if (x >= 118 && x < 196) return 2;
+        if (x >= 196 && x < 264) return 3;
+        if (x >= 264 && x < 332) return 4;
+        if (x >= 332 && x < 374) return 5;
+        if (x >= 374 && x < 416) return 6;
+        if (x >= 416 && x < 458) return 7;
+        if (x >= 458 && x < 506) return 8;
+        if (x >= 506 && x < 550) return 9;
+        if (x >= clientWidth - static_cast<int>(kWindowControlWidth * 3) && x < clientWidth - static_cast<int>(kWindowControlWidth * 2)) return 10;
+        if (x >= clientWidth - static_cast<int>(kWindowControlWidth * 2) && x < clientWidth - static_cast<int>(kWindowControlWidth)) return 11;
+        if (x >= clientWidth - static_cast<int>(kWindowControlWidth)) return 12;
+        return -1;
+    }
+
+    void SetHover(int item)
+    {
+        if (hoveredCommand_ == item) return;
+        hoveredCommand_ = item;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void UpdateHover(int x, int y)
+    {
+        RECT client{}; GetClientRect(hwnd_, &client);
+        SetHover(HitToolbarItem(x, y, client.right));
+        TRACKMOUSEEVENT tracking{ sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd_, 0 };
+        TrackMouseEvent(&tracking);
     }
 
     LRESULT HitTest(int screenX, int screenY) const
@@ -1281,6 +1319,7 @@ private:
             D2D1::HwndRenderTargetProperties(hwnd_, D2D1::SizeU(rect.right, rect.bottom)), &target_))) return false;
         if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.10f, 0.14f), &backgroundBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.13f, 0.16f, 0.22f), &toolbarBrush_)) ||
+            FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.23f, 0.28f), &hoverBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.84f, 0.88f, 0.96f), &textBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.61f, 0.64f, 0.70f), &mutedTextBrush_)) ||
             FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(0.28f, 0.65f, 1.0f), &accentBrush_))) return false;
@@ -1379,28 +1418,38 @@ private:
         }
     }
 
-    void DrawButton(const wchar_t* text, float left, float width)
+    void DrawHoverBackground(float left, float width, int command)
     {
+        if (hoveredCommand_ == command)
+            target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left + 2.0f, 8.0f, left + width - 2.0f, 50.0f), 8.0f, 8.0f), hoverBrush_.Get());
+    }
+
+    void DrawButton(const wchar_t* text, float left, float width, int command)
+    {
+        DrawHoverBackground(left, width, command);
         const D2D1_RECT_F rect = D2D1::RectF(left, 0.0f, left + width, kToolbarHeight);
         target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), rect, textBrush_.Get());
     }
 
-    void DrawIconButton(const wchar_t* icon, float left, float width)
+    void DrawIconButton(const wchar_t* icon, float left, float width, int command)
     {
+        DrawHoverBackground(left, width, command);
         const D2D1_RECT_F rect = D2D1::RectF(left, 0.0f, left + width, kToolbarHeight);
         target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), rect, textBrush_.Get());
     }
 
-    void DrawCommand(const wchar_t* icon, const wchar_t* text, float left, float width)
+    void DrawCommand(const wchar_t* icon, const wchar_t* text, float left, float width, int command)
     {
+        DrawHoverBackground(left, width, command);
         const auto iconRect = D2D1::RectF(left + 7.0f, 0.0f, left + 29.0f, kToolbarHeight);
         target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), iconRect, textBrush_.Get());
         const auto textRect = D2D1::RectF(left + 31.0f, 0.0f, left + width - 5.0f, kToolbarHeight);
         target_->DrawTextW(text, static_cast<UINT32>(wcslen(text)), textFormat_.Get(), textRect, textBrush_.Get());
     }
 
-    void DrawWindowButton(const wchar_t* icon, float left)
+    void DrawWindowButton(const wchar_t* icon, float left, int command)
     {
+        DrawHoverBackground(left, kWindowControlWidth, command);
         const auto rect = D2D1::RectF(left, 10.0f, left + kWindowControlWidth, 48.0f);
         target_->DrawTextW(icon, static_cast<UINT32>(wcslen(icon)), iconFormat_.Get(), rect, textBrush_.Get());
     }
@@ -1413,15 +1462,15 @@ private:
         target_->BeginDraw();
         target_->Clear(D2D1::ColorF(0.045f, 0.055f, 0.075f));
         target_->FillRectangle(D2D1::RectF(0, 0, size.width, kToolbarHeight), toolbarBrush_.Get());
-        DrawCommand(L"\xE8E5", L"打开", 52.0f, 66.0f);
-        DrawCommand(L"\xE838", L"文件夹", 118.0f, 78.0f);
-        DrawCommand(L"\xE823", L"最近", 196.0f, 68.0f);
-        DrawCommand(L"\xE895", L"更新", 264.0f, 68.0f);
-        DrawIconButton(L"\xE76B", 332.0f, 42.0f);
-        DrawIconButton(L"\xE76C", 374.0f, 42.0f);
-        DrawIconButton(L"\xE7AD", 416.0f, 42.0f);
-        DrawButton(L"适应", 458.0f, 48.0f);
-        DrawButton(L"1:1", 506.0f, 44.0f);
+        DrawCommand(L"\xE8E5", L"打开", 52.0f, 66.0f, 1);
+        DrawCommand(L"\xE838", L"文件夹", 118.0f, 78.0f, 2);
+        DrawCommand(L"\xE823", L"最近", 196.0f, 68.0f, 3);
+        DrawCommand(L"\xE895", L"更新", 264.0f, 68.0f, 4);
+        DrawIconButton(L"\xE76B", 332.0f, 42.0f, 5);
+        DrawIconButton(L"\xE76C", 374.0f, 42.0f, 6);
+        DrawIconButton(L"\xE7AD", 416.0f, 42.0f, 7);
+        DrawButton(L"适应", 458.0f, 48.0f, 8);
+        DrawButton(L"1:1", 506.0f, 44.0f, 9);
         const std::wstring& displayPath = pendingImagePath_.empty() ? imagePath_ : pendingImagePath_;
         const std::wstring title = displayPath.empty() ? L"AstraView" : FileNameOf(displayPath);
         const float center = size.width / 2.0f;
@@ -1431,9 +1480,9 @@ private:
         if (halfAvailable >= 24.0f)
             target_->DrawTextW(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(), D2D1::RectF(center - halfAvailable, 0.0f, center + halfAvailable, kToolbarHeight), textBrush_.Get());
         target_->DrawLine(D2D1::Point2F(0, kToolbarHeight - 1.0f), D2D1::Point2F(size.width, kToolbarHeight - 1.0f), backgroundBrush_.Get(), 1.0f);
-        DrawWindowButton(L"\xE921", size.width - kWindowControlWidth * 3.0f);
-        DrawWindowButton(IsZoomed(hwnd_) ? L"\xE923" : L"\xE922", size.width - kWindowControlWidth * 2.0f);
-        DrawWindowButton(L"\xE8BB", size.width - kWindowControlWidth);
+        DrawWindowButton(L"\xE921", size.width - kWindowControlWidth * 3.0f, 10);
+        DrawWindowButton(IsZoomed(hwnd_) ? L"\xE923" : L"\xE922", size.width - kWindowControlWidth * 2.0f, 11);
+        DrawWindowButton(L"\xE8BB", size.width - kWindowControlWidth, 12);
 
         if (imageBitmap_)
         {
@@ -1465,7 +1514,7 @@ private:
         }
         if (result == D2DERR_RECREATE_TARGET)
         {
-            imageBitmap_.Reset(); thumbnails_.clear(); emptyStateSubtitleFormat_.Reset(); emptyStateTitleFormat_.Reset(); titleFormat_.Reset(); iconFormat_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); mutedTextBrush_.Reset(); textBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
+            imageBitmap_.Reset(); thumbnails_.clear(); emptyStateSubtitleFormat_.Reset(); emptyStateTitleFormat_.Reset(); titleFormat_.Reset(); iconFormat_.Reset(); textFormat_.Reset(); accentBrush_.Reset(); mutedTextBrush_.Reset(); textBrush_.Reset(); hoverBrush_.Reset(); toolbarBrush_.Reset(); backgroundBrush_.Reset(); target_.Reset();
         }
         EndPaint(hwnd_, &ps);
     }
@@ -1477,7 +1526,7 @@ private:
     ComPtr<ID2D1Factory> d2dFactory_;
     ComPtr<IDWriteFactory> dwriteFactory_;
     ComPtr<ID2D1HwndRenderTarget> target_;
-    ComPtr<ID2D1SolidColorBrush> backgroundBrush_, toolbarBrush_, textBrush_, mutedTextBrush_, accentBrush_;
+    ComPtr<ID2D1SolidColorBrush> backgroundBrush_, toolbarBrush_, hoverBrush_, textBrush_, mutedTextBrush_, accentBrush_;
     ComPtr<IDWriteTextFormat> textFormat_, iconFormat_, titleFormat_, emptyStateTitleFormat_, emptyStateSubtitleFormat_;
     ComPtr<IWICBitmapSource> imageSource_;
     ComPtr<ID2D1Bitmap> imageBitmap_;
@@ -1511,6 +1560,7 @@ private:
     UINT imageWidth_{}, imageHeight_{}, originalImageWidth_{}, originalImageHeight_{};
     float scale_{ 1.0f }, panX_{}, panY_{};
     bool dragging_{};
+    int hoveredCommand_{ -1 };
     bool userAdjustedView_{};
     bool fullscreen_{};
     POINT lastMouse_{}, mouseDown_{};
